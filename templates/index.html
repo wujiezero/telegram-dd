@@ -1,0 +1,1299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram DD</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        :root {
+            --primary-bg: #000000;
+            --secondary-bg: #1c1c1e;
+            --card-bg: #2c2c2e;
+            --text-primary: #ffffff;
+            --text-secondary: #8e8e93;
+            --accent-blue: #007aff;
+            --accent-green: #34c759;
+            --accent-yellow: #ffcc00;
+            --border-radius: 12px;
+            --shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background-color: var(--primary-bg);
+            color: var(--text-primary);
+            line-height: 1.6;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        header {
+            text-align: center;
+            margin-bottom: 40px;
+            padding: 20px;
+            background-color: var(--secondary-bg);
+            border-radius: var(--border-radius);
+            box-shadow: var(--shadow);
+        }
+        
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 10px;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-green));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .subtitle {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+        
+        .stat-card {
+            background-color: var(--card-bg);
+            padding: 18px;
+            border-radius: var(--border-radius);
+            box-shadow: var(--shadow);
+            transition: var(--transition);
+        }
+        
+        /* Responsive adjustments */
+        @media (max-width: 1200px) {
+            .stats-grid {
+                grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+                gap: 12px;
+            }
+            
+            .stat-card {
+                padding: 16px;
+            }
+            
+            .stat-value {
+                font-size: 1.8rem;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .stats-grid {
+                grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+                gap: 10px;
+            }
+            
+            .stat-card {
+                padding: 14px;
+            }
+            
+            .stat-value {
+                font-size: 1.5rem;
+            }
+            
+            .stat-label {
+                font-size: 0.8rem;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 10px;
+            }
+            
+            .stat-card {
+                padding: 12px;
+            }
+            
+            .stat-value {
+                font-size: 1.3rem;
+            }
+        }
+        
+        .stat-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
+        }
+        
+        .stat-label {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .stat-value {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            word-break: break-all;
+            overflow-wrap: break-word;
+        }
+        
+        .status-section {
+            background-color: var(--secondary-bg);
+            padding: 20px;
+            border-radius: var(--border-radius);
+            box-shadow: var(--shadow);
+            margin-bottom: 30px;
+        }
+        
+        /* Fix for channel ID overflow */
+        #channel-id {
+            font-size: 1.5rem;
+            font-family: monospace;
+        }
+        
+        /* Mobile optimization */
+        @media (max-width: 768px) {
+            body {
+                padding: 8px;
+                font-size: 14px;
+            }
+            
+            h1 {
+                font-size: 1.8rem;
+            }
+            
+            .subtitle {
+                font-size: 0.9rem;
+            }
+            
+            .status-section {
+                padding: 15px;
+                margin-bottom: 20px;
+            }
+            
+            h2 {
+                font-size: 1.4rem;
+                margin-bottom: 15px;
+            }
+            
+            /* Stats grid optimization */
+            .stats-grid {
+                gap: 10px;
+                margin-bottom: 20px;
+            }
+            
+            /* Filter controls optimization */
+            .filter-controls {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 10px;
+                margin-bottom: 15px;
+            }
+            
+            .filter-group {
+                width: 100%;
+                margin-bottom: 5px;
+            }
+            
+            .filter-group label {
+                font-size: 0.8rem;
+            }
+            
+            .filter-group input,
+            .filter-group select {
+                width: 100%;
+                min-width: auto;
+                padding: 6px 10px;
+                font-size: 0.9rem;
+            }
+            
+            /* Task list optimization */
+            .task-list {
+                gap: 10px;
+            }
+            
+            /* Task item optimization */
+            .task-item {
+                padding: 12px;
+                gap: 8px;
+            }
+            
+            .task-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 5px;
+            }
+            
+            .task-name {
+                font-size: 0.95rem;
+                word-break: break-all;
+                overflow-wrap: break-word;
+                line-height: 1.3;
+            }
+            
+            .task-status {
+                font-size: 0.75rem;
+                padding: 3px 10px;
+            }
+            
+            .task-meta {
+                flex-direction: column;
+                gap: 3px;
+                font-size: 0.8rem;
+            }
+            
+            .task-progress {
+                font-size: 0.8rem;
+                margin-top: 8px;
+            }
+            
+            /* Task actions optimization */
+            .task-actions {
+                gap: 8px;
+                margin-top: 10px;
+            }
+            
+            .task-btn {
+                padding: 6px 12px;
+                font-size: 0.8rem;
+            }
+            
+            /* Pagination optimization */
+            .pagination {
+                flex-direction: column;
+                gap: 10px;
+                align-items: stretch;
+            }
+            
+            .pagination > div {
+                text-align: center;
+            }
+            
+            #page-buttons {
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+            
+            .page-btn {
+                margin: 0 3px;
+                padding: 4px 8px;
+                font-size: 0.8rem;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            body {
+                font-size: 13px;
+            }
+            
+            .stat-value {
+                font-size: 1.2rem;
+            }
+            
+            #channel-id {
+                font-size: 1rem;
+            }
+            
+            h1 {
+                font-size: 1.6rem;
+            }
+            
+            h2 {
+                font-size: 1.2rem;
+            }
+            
+            .status-section {
+                padding: 10px;
+            }
+            
+            .task-item {
+                padding: 10px;
+            }
+            
+            .task-name {
+                font-size: 0.9rem;
+            }
+            
+            /* Task actions in column for very small screens */
+            .task-actions {
+                flex-direction: column;
+            }
+            
+            /* Pagination buttons optimization for very small screens */
+            #page-buttons {
+                gap: 3px;
+            }
+            
+            .page-btn {
+                margin: 2px;
+                padding: 3px 6px;
+                font-size: 0.75rem;
+            }
+        }
+        
+        h2 {
+            font-size: 1.8rem;
+            font-weight: 600;
+            margin-bottom: 20px;
+            color: var(--text-primary);
+        }
+        
+        /* Filter Controls */
+        .filter-controls {
+            margin-bottom: 20px; 
+            display: flex; 
+            flex-wrap: wrap; 
+            gap: 15px; 
+            align-items: center;
+        }
+        
+        .filter-group {
+            display: flex; 
+            flex-direction: column; 
+            gap: 5px;
+        }
+        
+        .filter-group label {
+            color: var(--text-secondary); 
+            font-size: 0.9rem;
+        }
+        
+        .filter-group input,
+        .filter-group select {
+            padding: 8px 12px; 
+            background-color: var(--card-bg); 
+            border: 1px solid var(--text-secondary); 
+            border-radius: 8px; 
+            color: var(--text-primary); 
+            font-size: 1rem; 
+            min-width: 200px;
+        }
+        
+        .filter-controls button {
+            padding: 8px 16px; 
+            background-color: var(--accent-blue); 
+            color: white; 
+            border: none; 
+            border-radius: 8px; 
+            font-size: 1rem; 
+            cursor: pointer; 
+            transition: var(--transition);
+        }
+        
+        .filter-controls button:hover {
+            opacity: 0.9;
+        }
+        
+        #apply-filter {
+            background-color: var(--accent-green);
+        }
+        
+        /* Task List */
+        .task-list {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        
+        .task-item {
+            background-color: var(--card-bg);
+            padding: 20px;
+            border-radius: var(--border-radius);
+            transition: var(--transition);
+            border-left: 4px solid var(--accent-blue);
+        }
+        
+        .task-item:hover {
+            transform: translateX(4px);
+            box-shadow: var(--shadow);
+        }
+        
+        .task-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .task-name {
+            font-weight: 600;
+            font-size: 1.1rem;
+        }
+        
+        .task-status {
+            padding: 4px 12px;
+            border-radius: 16px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+        
+        .status-downloading {
+            background-color: rgba(0, 122, 255, 0.2);
+            color: var(--accent-blue);
+        }
+        
+        .status-queued {
+            background-color: rgba(255, 204, 0, 0.2);
+            color: var(--accent-yellow);
+        }
+        
+        .status-completed {
+            background-color: rgba(52, 199, 89, 0.2);
+            color: var(--accent-green);
+        }
+        
+        .task-meta {
+            display: flex; 
+            justify-content: space-between; 
+            margin-top: 5px; 
+            font-size: 0.85rem; 
+            color: var(--text-secondary);
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        
+        .task-progress {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            margin-top: 10px;
+        }
+        
+        .progress-bar-container {
+            background-color: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            height: 8px;
+            margin-top: 5px;
+            overflow: hidden;
+        }
+        
+        .progress-bar {
+            background-color: var(--accent-green);
+            height: 100%;
+            border-radius: 8px;
+            transition: width 0.3s ease;
+        }
+        
+        /* Task actions styles */
+        .task-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        
+        .task-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+            text-decoration: none;
+            display: inline-block;
+            text-align: center;
+        }
+        
+        .download-btn {
+            background-color: var(--accent-blue);
+            color: white;
+        }
+        
+        .download-btn:hover {
+            background-color: rgba(0, 122, 255, 0.8);
+            transform: translateY(-2px);
+        }
+        
+        .delete-btn {
+            background-color: #ff3b30;
+            color: white;
+        }
+        
+        .delete-btn:hover {
+            background-color: rgba(255, 59, 48, 0.8);
+            transform: translateY(-2px);
+        }
+        
+        .rename-btn {
+            background-color: #ff9500;
+            color: white;
+        }
+        
+        .rename-btn:hover {
+            background-color: rgba(255, 149, 0, 0.8);
+            transform: translateY(-2px);
+        }
+        
+        /* Responsive adjustments for buttons */
+        @media (max-width: 768px) {
+            .task-actions {
+                gap: 8px;
+                margin-top: 12px;
+            }
+            
+            .task-btn {
+                padding: 6px 12px;
+                font-size: 0.8rem;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .task-actions {
+                flex-direction: column;
+            }
+            
+            .task-btn {
+                width: 100%;
+            }
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-secondary);
+            font-style: italic;
+        }
+        
+        /* Pagination */
+        .pagination {
+            margin-top: 20px; 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center;
+        }
+        
+        .pagination button {
+            padding: 6px 12px; 
+            background-color: var(--card-bg); 
+            color: var(--text-primary); 
+            border: 1px solid var(--text-secondary); 
+            border-radius: 6px; 
+            font-size: 0.9rem; 
+            cursor: pointer; 
+            transition: var(--transition);
+        }
+        
+        .pagination button:disabled {
+            opacity: 0.5; 
+            pointer-events: none;
+        }
+        
+        .pagination .page-btn {
+            margin: 0 5px;
+        }
+        
+        .pagination .page-btn.active {
+            background-color: var(--accent-blue); 
+            color: white; 
+            border: none;
+        }
+        
+        /* Proxy and User Info */
+        .proxy-info {
+            background-color: rgba(0, 122, 255, 0.1);
+            padding: 15px;
+            border-radius: var(--border-radius);
+            margin-top: 10px;
+        }
+        
+        .proxy-info p {
+            margin: 5px 0;
+        }
+        
+        .telegram-user {
+            background-color: rgba(52, 199, 89, 0.1);
+            padding: 15px;
+            border-radius: var(--border-radius);
+            margin-top: 10px;
+        }
+        
+        @media (max-width: 768px) {
+            body {
+                padding: 10px;
+            }
+            
+            h1 {
+                font-size: 2rem;
+            }
+            
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .status-section {
+                padding: 20px;
+            }
+            
+            .filter-controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .filter-group input,
+            .filter-group select {
+                min-width: auto;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Telegram Download Daemon</h1>
+            <p class="subtitle">Monitor your downloads and service status</p>
+        </header>
+        
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Uptime</div>
+                <div class="stat-value" id="uptime">Loading...</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Active Downloads</div>
+                <div class="stat-value" id="active-downloads">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Queue Size</div>
+                <div class="stat-value" id="queue-size">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Version</div>
+                <div class="stat-value">v{{ version }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Channel ID</div>
+                <div class="stat-value" id="channel-id">Loading...</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total Tasks</div>
+                <div class="stat-value" id="total-tasks">0</div>
+            </div>
+        </div>
+        
+        <div class="status-section">
+            <h2>Service Status</h2>
+            <div id="service-info">
+                <div class="proxy-info">
+                    <h3>Proxy Configuration</h3>
+                    {% if proxy %}
+                        <p><strong>Type:</strong> {{ proxy.type }}</p>
+                        <p><strong>Address:</strong> {{ proxy.host }}:{{ proxy.port }}</p>
+                        {% if proxy.username %}
+                            <p><strong>Username:</strong> {{ proxy.username }}</p>
+                        {% endif %}
+                    {% else %}
+                        <p>No proxy configured</p>
+                    {% endif %}
+                </div>
+                
+                <div class="telegram-user">
+                    <h3>Telegram Account</h3>
+                    {% if telegram_user %}
+                        <p><strong>Name:</strong> {{ telegram_user.first_name }} {{ telegram_user.last_name }}</p>
+                    {% else %}
+                        <p>Not logged in</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        
+        <div class="status-section">
+            <h2>Download Tasks</h2>
+            
+            <!-- Filter Controls -->
+            <div class="filter-controls">
+                <div class="filter-group">
+                    <label>Filename</label>
+                    <input type="text" id="filename-filter" placeholder="Search filename...">
+                </div>
+                
+                <div class="filter-group">
+                    <label>File Type</label>
+                    <select id="filetype-filter">
+                        <option value="all">All Types</option>
+                        <option value="Music">Music</option>
+                        <option value="Videos">Videos</option>
+                        <option value="Pictures">Pictures</option>
+                        <option value="Archives">Archives</option>
+                        <option value="Documents">Documents</option>
+                        <option value="Books">Books</option>
+                        <option value="DEBPackages">DEB Packages</option>
+                        <option value="Programs">Programs</option>
+                        <option value="RPMPackages">RPM Packages</option>
+                        <option value="Mac">Mac</option>
+                        <option value="Linux">Linux</option>
+                        <option value="Android">Android</option>
+                        <option value="Other">Other</option>
+                    </select>
+                </div>
+                
+                <div class="filter-group">
+                    <label>Status</label>
+                    <select id="status-filter">
+                        <option value="all">All Status</option>
+                        <option value="downloading">Downloading</option>
+                        <option value="queued">Queued</option>
+                        <option value="completed">Completed</option>
+                    </select>
+                </div>
+                
+                <div style="margin-left: auto; display: flex; gap: 10px; align-items: flex-end;">
+                    <button id="reset-filter">Reset</button>
+                    <button id="apply-filter">Apply</button>
+                </div>
+            </div>
+            
+            <!-- Task List -->
+            <div class="task-list" id="task-list">
+                <div class="empty-state">Loading tasks...</div>
+            </div>
+            
+            <!-- Pagination Controls -->
+            <div class="pagination">
+                <div>
+                    Showing <span id="showing-start">1</span> to <span id="showing-end">0</span> of <span id="total-items">0</span> items
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <button id="prev-page" disabled>Previous</button>
+                    <div id="page-buttons" style="display: flex; gap: 5px;">
+                        <!-- Page buttons will be dynamically generated -->
+                    </div>
+                    <button id="next-page" disabled>Next</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Socket.IO Client Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.0/socket.io.min.js"></script>
+    
+    <script>
+        // File Type Categorization Rules
+        const fileTypeRules = {
+            'IGNORE': ['part', 'desktop'],
+            'Music': ['mp3', 'aac', 'flac', 'ogg', 'wma', 'm4a', 'aiff', 'wav', 'amr'],
+            'Videos': ['flv', 'ogv', 'avi', 'mp4', 'mpg', 'mpeg', '3gp', 'mkv', 'ts', 'webm', 'vob', 'wmv', 'srt'],
+            'Pictures': ['png', 'jpeg', 'gif', 'jpg', 'bmp', 'svg', 'webp', 'psd', 'tiff'],
+            'Archives': ['rar', 'zip', '7z', 'gz', 'bz2', 'tar', 'tgz', 'xz', 'iso', 'cpio'],
+            'Documents': ['txt', 'pdf', 'doc', 'docx', 'odf', 'xls', 'xlsv', 'xlsx', 'ppt', 'pptx', 'ppsx', 'odp', 'odt', 'ods', 'md', 'json', 'csv'],
+            'Books': ['mobi', 'epub', 'chm'],
+            'DEBPackages': ['deb'],
+            'Programs': ['exe', 'msi'],
+            'RPMPackages': ['rpm'],
+            'Mac': ['dmg', 'pkg'],
+            'Linux': ['sh', 'rpm', 'deb'],
+            'Android': ['apk']
+        };
+        
+        // Function to format file size
+        function formatFileSize(bytes) {
+            if (bytes === undefined || bytes === null || bytes === 0) {
+                return '0 KB';
+            }
+            
+            const kilobyte = 1024;
+            const megabyte = kilobyte * 1024;
+            const gigabyte = megabyte * 1024;
+            
+            if (bytes >= gigabyte) {
+                return (bytes / gigabyte).toFixed(2) + ' GB';
+            } else if (bytes >= megabyte) {
+                return (bytes / megabyte).toFixed(2) + ' MB';
+            } else {
+                return (bytes / kilobyte).toFixed(2) + ' KB';
+            }
+        }
+        
+        // Initialize Socket.IO connection
+        const socket = io();
+        
+        // Handle connection event
+        socket.on('connect', () => {
+            console.log('WebSocket connected');
+        });
+        
+        // Handle disconnection event
+        socket.on('disconnect', () => {
+            console.log('WebSocket disconnected');
+        });
+        
+        // Handle new task notification
+        socket.on('new_task', (task) => {
+            console.log('New task received:', task);
+            // Refresh tasks list to show new task
+            initializeTasks();
+        });
+        
+        // Handle download progress update
+        socket.on('download_progress', (progressData) => {
+            console.log('Download progress update:', progressData);
+            // Update progress bar for the specific task
+            updateTaskProgress(progressData);
+        });
+        
+        // Handle status update event for real-time stats
+        socket.on('status_update', (statusData) => {
+            console.log('Status update received:', statusData);
+            // Update the stats on the page
+            document.getElementById('active-downloads').textContent = statusData.active_downloads;
+            document.getElementById('queue-size').textContent = statusData.queue_size;
+            document.getElementById('total-tasks').textContent = statusData.total_tasks;
+        });
+        
+        // Function to update task progress in the UI
+        function updateTaskProgress(progressData) {
+            const taskItems = document.querySelectorAll('.task-item');
+            taskItems.forEach(item => {
+                const taskName = item.querySelector('.task-name').textContent;
+                if (taskName === progressData.filename) {
+                    // Update progress text
+                    const progressElement = item.querySelector('.task-progress');
+                    if (progressElement) {
+                        progressElement.textContent = `${progressData.progress}%`;
+                    }
+                    
+                    // Update progress bar if it exists
+                    const progressBar = item.querySelector('.progress-bar');
+                    if (progressBar) {
+                        progressBar.style.width = `${progressData.progress}%`;
+                    }
+                }
+            });
+        }
+        
+        // Function to get file type category
+        function getFileTypeCategory(filename) {
+            const ext = filename.split('.').pop().toLowerCase();
+            
+            // Check ignore list first
+            if (fileTypeRules['IGNORE'].includes(ext)) {
+                return 'IGNORE';
+            }
+            
+            // Check each category
+            for (const [category, extensions] of Object.entries(fileTypeRules)) {
+                if (category !== 'IGNORE' && extensions.includes(ext)) {
+                    return category;
+                }
+            }
+            
+            // Default to Other if no match
+            return 'Other';
+        }
+        
+        // Pagination and Filtering
+        let currentPage = 1;
+        const itemsPerPage = 10;
+        let allTasks = [];
+        let filteredTasks = [];
+        let totalItems = 0;
+        let currentFilters = {}; // Store current filters for auto-refresh
+        
+        // Initialize uptime tracking
+        let startTime = null;
+        let initialUptimeSeconds = 0;
+        
+        // Format seconds into HH:MM:SS
+        function formatUptime(seconds) {
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        }
+        
+        // Update uptime every second using local calculation
+        function updateLocalUptime() {
+            if (startTime) {
+                const currentTime = Date.now();
+                const elapsedSeconds = Math.floor((currentTime - startTime) / 1000);
+                const totalSeconds = initialUptimeSeconds + elapsedSeconds;
+                document.getElementById('uptime').textContent = formatUptime(totalSeconds);
+            }
+        }
+        
+        // Update other status data from API
+        function updateStatusData() {
+            fetch('/api/status')
+                .then(response => response.json())
+                .then(data => {
+                    // Update active downloads, queue size, channel id, and total tasks
+                    document.getElementById('active-downloads').textContent = data.active_downloads;
+                    document.getElementById('queue-size').textContent = data.queue_size;
+                    document.getElementById('channel-id').textContent = data.channel_id;
+                    document.getElementById('total-tasks').textContent = data.total_tasks;
+                    
+                    // Initialize uptime if not already done
+                    if (!startTime) {
+                        // Parse initial uptime from API response (format: HH:MM:SS)
+                        const uptimeParts = data.uptime.split(':');
+                        initialUptimeSeconds = parseInt(uptimeParts[0]) * 3600 + parseInt(uptimeParts[1]) * 60 + parseInt(uptimeParts[2]);
+                        startTime = Date.now();
+                        // Start local uptime updates
+                        setInterval(updateLocalUptime, 1000);
+                    }
+                });
+        }
+        
+        // Initialize tasks data from API with optional filters
+        async function initializeTasks(filters = {}) {
+            // Use currentFilters if no filters provided (for auto-refresh)
+            const effectiveFilters = Object.keys(filters).length === 0 ? currentFilters : filters;
+            
+            // Get real-time tasks
+            const tasksResponse = await fetch('/api/tasks');
+            const tasksData = await tasksResponse.json();
+            const realTimeTasks = tasksData.tasks.map((task, index) => {
+                return {
+                    id: `real-${index}`,
+                    filename: task.filename,
+                    status: task.status,
+                    type: getFileTypeCategory(task.filename),
+                    downloadTime: task.downloadTime || new Date().toISOString().slice(0, 19).replace('T', ' '),
+                    progress: task.progress,
+                    size: task.size || 0,
+                    isRealTime: true
+                };
+            });
+            
+            // Build query string with effective filters
+            let queryString = `?page=${currentPage}&per_page=${itemsPerPage}`;
+            if (effectiveFilters.filename) {
+                queryString += `&filename=${encodeURIComponent(effectiveFilters.filename)}`;
+            }
+            if (effectiveFilters.filetype && effectiveFilters.filetype !== 'all') {
+                queryString += `&file_type=${encodeURIComponent(effectiveFilters.filetype)}`;
+            }
+            if (effectiveFilters.status && effectiveFilters.status !== 'all') {
+                queryString += `&status=${encodeURIComponent(effectiveFilters.status)}`;
+            }
+            
+            // Get historical tasks with pagination and filters
+            const historyResponse = await fetch(`/api/history${queryString}`);
+            const historyData = await historyResponse.json();
+            const historicalTasks = historyData.history.map(task => {
+                return {
+                    id: `history-${task.id}`,
+                    filename: task.filename,
+                    status: task.status,
+                    type: task.file_type,
+                    downloadTime: task.start_time,
+                    progress: task.progress + '%',
+                    size: task.size || 0,
+                    isRealTime: false
+                };
+            });
+            
+            // Combine real-time tasks with historical tasks, removing duplicates
+            const taskMap = new Map();
+            
+            // Add real-time tasks first (they have priority)
+            realTimeTasks.forEach(task => {
+                taskMap.set(task.filename, task);
+            });
+            
+            // Add historical tasks only if they're not already in the map
+            historicalTasks.forEach(task => {
+                if (!taskMap.has(task.filename)) {
+                    taskMap.set(task.filename, task);
+                }
+            });
+            
+            // Convert map back to array
+            allTasks = Array.from(taskMap.values());
+            totalItems = historyData.total + realTimeTasks.length;
+            
+            // Clear any existing filters
+            filteredTasks = [];
+            
+            // Render tasks directly
+            renderTasks();
+        }
+        
+        // Apply filters
+        function applyFilters() {
+            currentPage = 1;
+            
+            // Get filter values
+            const filenameFilter = document.getElementById('filename-filter').value;
+            const filetypeFilter = document.getElementById('filetype-filter').value;
+            const statusFilter = document.getElementById('status-filter').value;
+            
+            // Store current filters for auto-refresh
+            currentFilters = {
+                filename: filenameFilter,
+                filetype: filetypeFilter,
+                status: statusFilter
+            };
+            
+            // Call initializeTasks with filters to fetch filtered data from API
+            initializeTasks(currentFilters);
+        }
+        
+        // Reset filters
+        function resetFilters() {
+            document.getElementById('filename-filter').value = '';
+            document.getElementById('filetype-filter').value = 'all';
+            document.getElementById('status-filter').value = 'all';
+            
+            // Clear filtered tasks
+            filteredTasks = [];
+            
+            // Clear current filters
+            currentFilters = {};
+            
+            // Re-initialize tasks data without filters
+            initializeTasks();
+        }
+        
+        // Render tasks with pagination
+        function renderTasks() {
+            const taskList = document.getElementById('task-list');
+            
+            // Use filtered tasks if available, otherwise use all tasks
+            const tasksToRender = filteredTasks.length > 0 ? filteredTasks : allTasks;
+            const totalItems = tasksToRender.length;
+            const totalPages = Math.ceil(totalItems / itemsPerPage);
+            
+            // Calculate start and end indices for display
+            const startIndex = (currentPage - 1) * itemsPerPage + 1;
+            const endIndex = Math.min(currentPage * itemsPerPage, totalItems);
+            
+            // Update showing info
+            document.getElementById('showing-start').textContent = startIndex;
+            document.getElementById('showing-end').textContent = endIndex;
+            document.getElementById('total-items').textContent = totalItems;
+            
+            // Clear current task list
+            taskList.innerHTML = '';
+            
+            // Add current tasks
+            if (tasksToRender.length === 0) {
+                taskList.innerHTML = '<div class="empty-state">No matching tasks</div>';
+            } else {
+                // Get the tasks for the current page
+                const start = (currentPage - 1) * itemsPerPage;
+                const end = start + itemsPerPage;
+                const pageTasks = tasksToRender.slice(start, end);
+                
+                pageTasks.forEach(task => {
+                    const taskElement = document.createElement('div');
+                    taskElement.className = 'task-item';
+                    
+                    // Extract progress percentage for progress bar
+                    let progressPercent = 0;
+                    if (task.status === 'downloading') {
+                        // Extract percentage from progress string (e.g., "50 % (100 / 200)")
+                        const percentMatch = task.progress.match(/(\d+(?:\.\d+)?) %/);
+                        if (percentMatch) {
+                            progressPercent = parseFloat(percentMatch[1]);
+                        }
+                    }
+                    
+                    // Create task HTML with progress bar for downloading tasks
+                    let progressBarHtml = '';
+                    if (task.status === 'downloading') {
+                        progressBarHtml = `
+                            <div class="progress-bar-container">
+                                <div class="progress-bar" style="width: ${progressPercent}%"></div>
+                            </div>
+                        `;
+                    }
+                    
+                    taskElement.innerHTML = `
+                        <div class="task-header">
+                            <div class="task-name">${task.filename}</div>
+                            <span class="task-status status-${task.status}">${task.status}</span>
+                        </div>
+                        <div class="task-meta">
+                            <span>Type: ${task.type}</span>
+                            <span>Size: ${formatFileSize(task.size)}</span>
+                            <span>Download Time: ${task.downloadTime}</span>
+                        </div>
+                        <div class="task-progress">
+                            ${task.progress}
+                            ${progressBarHtml}
+                        </div>
+                        <div class="task-actions">
+                            <button class="task-btn download-btn" onclick="downloadFile('${task.id}', '${encodeURIComponent(task.filename)}')" ${task.status === 'downloading' ? 'disabled' : ''}>
+                                Download
+                            </button>
+                            <button class="task-btn rename-btn" onclick="renameFile('${task.id}', '${encodeURIComponent(task.filename)}')" ${task.status === 'downloading' || task.status === 'queued' ? 'disabled' : ''}>
+                                Rename
+                            </button>
+                            <button class="task-btn delete-btn" onclick="deleteFile('${task.id}', '${encodeURIComponent(task.filename)}')">
+                                Delete
+                            </button>
+                        </div>
+                    `;
+                    taskList.appendChild(taskElement);
+                });
+            }
+            
+            // Update pagination buttons
+            updatePagination(totalPages);
+        }
+        
+        // Update pagination controls
+        function updatePagination(totalPages) {
+            const prevBtn = document.getElementById('prev-page');
+            const nextBtn = document.getElementById('next-page');
+            const pageBtnsContainer = document.getElementById('page-buttons');
+            
+            // Clear existing page buttons
+            pageBtnsContainer.innerHTML = '';
+            
+            // Create page buttons
+            for (let i = 1; i <= totalPages; i++) {
+                const btn = document.createElement('button');
+                btn.className = `page-btn ${i === currentPage ? 'active' : ''}`;
+                btn.textContent = i;
+                btn.dataset.page = i;
+                
+                btn.addEventListener('click', () => {
+                    currentPage = parseInt(btn.dataset.page);
+                    renderTasks();
+                });
+                
+                pageBtnsContainer.appendChild(btn);
+            }
+            
+            // Update prev/next buttons
+            prevBtn.disabled = currentPage === 1;
+            nextBtn.disabled = currentPage === totalPages || totalPages === 0;
+        }
+        
+        // Event listeners
+        document.addEventListener('DOMContentLoaded', () => {
+            // Apply filter button
+            document.getElementById('apply-filter').addEventListener('click', applyFilters);
+            
+            // Reset filter button
+            document.getElementById('reset-filter').addEventListener('click', resetFilters);
+            
+            // Previous page button
+            document.getElementById('prev-page').addEventListener('click', () => {
+                if (currentPage > 1) {
+                    currentPage--;
+                    initializeTasks();
+                }
+            });
+            
+            // Next page button
+            document.getElementById('next-page').addEventListener('click', () => {
+                const totalPages = Math.ceil(totalItems / itemsPerPage);
+                if (currentPage < totalPages) {
+                    currentPage++;
+                    initializeTasks();
+                }
+            });
+            
+            // Real-time filename filter (debounced)
+            let filenameTimeout;
+            document.getElementById('filename-filter').addEventListener('input', () => {
+                clearTimeout(filenameTimeout);
+                filenameTimeout = setTimeout(applyFilters, 3000);
+            });
+            
+            // File type filter change
+            document.getElementById('filetype-filter').addEventListener('change', applyFilters);
+            
+            // Status filter change
+            document.getElementById('status-filter').addEventListener('change', applyFilters);
+        });
+        
+        // Initial updates
+        updateStatusData();
+        initializeTasks();
+        
+        // Download file function
+        function downloadFile(taskId, filename) {
+            // Create a download link and trigger it
+            const downloadUrl = `/api/download?task_id=${taskId}&filename=${filename}`;
+            const link = document.createElement('a');
+            link.href = downloadUrl;
+            link.download = decodeURIComponent(filename);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+        
+        // Delete file function with confirmation
+        function deleteFile(taskId, filename) {
+            // Show confirmation dialog
+            const confirmDelete = confirm(`Are you sure you want to delete "${decodeURIComponent(filename)}"? This action cannot be undone.`);
+            
+            if (confirmDelete) {
+                // Send DELETE request to API
+                fetch(`/api/delete?task_id=${taskId}&filename=${filename}`, {
+                    method: 'DELETE'
+                })
+                .then(response => {
+                    if (response.ok) {
+                        // Refresh tasks list after successful deletion
+                        initializeTasks();
+                        // Show success message
+                        alert('File deleted successfully');
+                    } else {
+                        // Show error message
+                        return response.json().then(data => {
+                            throw new Error(data.error || 'Failed to delete file');
+                        });
+                    }
+                })
+                .catch(error => {
+                    console.error('Error deleting file:', error);
+                    alert(`Failed to delete file: ${error.message}`);
+                });
+            }
+        }
+        
+        // Rename file function
+        function renameFile(taskId, filename) {
+            // Get current filename without URL encoding
+            const currentFilename = decodeURIComponent(filename);
+            
+            // Prompt user for new filename
+            const newFilename = prompt('Enter new filename:', currentFilename);
+            
+            // Check if user entered a new filename and it's different from current
+            if (newFilename && newFilename.trim() && newFilename !== currentFilename) {
+                // Send POST request to API to rename file
+                fetch(`/api/rename?task_id=${taskId}&filename=${filename}&new_filename=${encodeURIComponent(newFilename)}`, {
+                    method: 'POST'
+                })
+                .then(response => {
+                    if (response.ok) {
+                        // Refresh tasks list after successful renaming
+                        initializeTasks();
+                        // Show success message
+                        alert('File renamed successfully');
+                    } else {
+                        // Show error message
+                        return response.json().then(data => {
+                            throw new Error(data.error || 'Failed to rename file');
+                        });
+                    }
+                })
+                .catch(error => {
+                    console.error('Error renaming file:', error);
+                    alert(`Failed to rename file: ${error.message}`);
+                });
+            }
+        }
+        
+        // Set intervals - reduce API calls frequency
+        setInterval(updateStatusData, 30000); // Update status data every 30 seconds
+        // setInterval(initializeTasks, 10000); // Update tasks every 10 seconds
+    </script>
+</body>
+</html>

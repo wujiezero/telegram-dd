@@ -1,0 +1,13 @@
+cffi>=1.14.0
+cryptg>=0.3
+pyaes>=1.6.1
+pyasn1>=0.4.8
+pycparser>=2.20
+rsa>=4.7
+Telethon>=1.24.0
+PySocks>=1.7.1
+Flask>=2.0.0
+flask-socketio>=5.5.1
+python-socketio>=5.15.0
+python-engineio>=4.12.3
+simple-websocket>=1.1.0
