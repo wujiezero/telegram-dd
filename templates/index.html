@@ -598,6 +598,16 @@
                     </select>
                 </div>
 
+                <div class="filter-group">
+                    <label>Items per page</label>
+                    <select id="items-per-page">
+                        <option value="10">10</option>
+                        <option value="25">25</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                </div>
+
                 <div style="margin-left: auto; display: flex; gap: 10px; align-items: flex-end;">
                     <button id="reset-filter">Reset</button>
                     <button id="apply-filter">Apply</button>
@@ -741,10 +751,11 @@
 
         // Pagination and Filtering
         let currentPage = 1;
-        const itemsPerPage = 10;
+        let itemsPerPage = 10;
         let allTasks = [];
         let filteredTasks = [];
         let totalItems = 0;
+        let totalPages = 0;
         let currentFilters = {}; // Store current filters for auto-refresh
 
         // Initialize uptime tracking
@@ -858,7 +869,20 @@
 
             // Convert map back to array
             allTasks = Array.from(taskMap.values());
-            totalItems = historyData.total + realTimeTasks.length;
+            
+            // Calculate total items correctly
+            const realTimeTasksInFilter = realTimeTasks.filter(task => {
+                const matchesFilename = !effectiveFilters.filename || 
+                    task.filename.toLowerCase().includes(effectiveFilters.filename.toLowerCase());
+                const matchesFiletype = !effectiveFilters.filetype || effectiveFilters.filetype === 'all' || 
+                    task.type === effectiveFilters.filetype;
+                const matchesStatus = !effectiveFilters.status || effectiveFilters.status === 'all' || 
+                    task.status === effectiveFilters.status;
+                return matchesFilename && matchesFiletype && matchesStatus;
+            });
+            
+            totalItems = historyData.total + realTimeTasksInFilter.length;
+            totalPages = Math.ceil(totalItems / itemsPerPage);
 
             // Clear any existing filters
             filteredTasks = [];
@@ -875,6 +899,7 @@
             const filenameFilter = document.getElementById('filename-filter').value;
             const filetypeFilter = document.getElementById('filetype-filter').value;
             const statusFilter = document.getElementById('status-filter').value;
+            itemsPerPage = parseInt(document.getElementById('items-per-page').value);
 
             // Store current filters for auto-refresh
             currentFilters = {
@@ -892,6 +917,8 @@
             document.getElementById('filename-filter').value = '';
             document.getElementById('filetype-filter').value = 'all';
             document.getElementById('status-filter').value = 'all';
+            document.getElementById('items-per-page').value = '10';
+            itemsPerPage = 10;
 
             // Clear filtered tasks
             filteredTasks = [];
@@ -907,11 +934,6 @@
         function renderTasks() {
             const taskList = document.getElementById('task-list');
 
-            // Use filtered tasks if available, otherwise use all tasks
-            const tasksToRender = filteredTasks.length > 0 ? filteredTasks : allTasks;
-            const totalItems = tasksToRender.length;
-            const totalPages = Math.ceil(totalItems / itemsPerPage);
-
             // Calculate start and end indices for display
             const startIndex = (currentPage - 1) * itemsPerPage + 1;
             const endIndex = Math.min(currentPage * itemsPerPage, totalItems);
@@ -925,15 +947,10 @@
             taskList.innerHTML = '';
 
             // Add current tasks
-            if (tasksToRender.length === 0) {
+            if (allTasks.length === 0) {
                 taskList.innerHTML = '<div class="empty-state">No matching tasks</div>';
             } else {
-                // Get the tasks for the current page
-                const start = (currentPage - 1) * itemsPerPage;
-                const end = start + itemsPerPage;
-                const pageTasks = tasksToRender.slice(start, end);
-
-                pageTasks.forEach(task => {
+                allTasks.forEach(task => {
                     const taskElement = document.createElement('div');
                     taskElement.className = 'task-item';
 
@@ -1009,7 +1026,7 @@
 
                 btn.addEventListener('click', () => {
                     currentPage = parseInt(btn.dataset.page);
-                    renderTasks();
+                    initializeTasks(); // Re-fetch data for the new page
                 });
 
                 pageBtnsContainer.appendChild(btn);
@@ -1038,7 +1055,6 @@
 
             // Next page button
             document.getElementById('next-page').addEventListener('click', () => {
-                const totalPages = Math.ceil(totalItems / itemsPerPage);
                 if (currentPage < totalPages) {
                     currentPage++;
                     initializeTasks();
@@ -1057,6 +1073,9 @@
 
             // Status filter change
             document.getElementById('status-filter').addEventListener('change', applyFilters);
+
+            // Items per page change
+            document.getElementById('items-per-page').addEventListener('change', applyFilters);
         });
 
         // Initial updates
