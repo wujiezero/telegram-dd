@@ -1,7 +1,7 @@
 .vscode
 .venv
 .env
-
+.idea/*
 *.session
 
 __pycache__
