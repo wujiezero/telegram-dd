@@ -3,5 +3,6 @@
 .env
 .idea/*
 *.session
-
+downloads.db
 __pycache__
+.pytest_cache
