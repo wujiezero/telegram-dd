@@ -783,6 +783,12 @@ try:
         status_lock = asyncio.Lock()
         # 用于同步回调的锁
         sync_lock = threading.Lock()
+        # 用于保护 queue_items 列表的锁
+        queue_lock = asyncio.Lock()
+        # 用于保护数据库操作的异步锁
+        db_lock = asyncio.Lock()
+        # 用于保护数据库操作的同步锁（用于回调函数）
+        sync_db_lock = threading.Lock()
         
         # 创建队列和队列跟踪列表
         queue = asyncio.Queue()
@@ -836,7 +842,34 @@ try:
             logger.debug(f"Received new message event: {event}")
             
             try:
-                if not event.media and event.message:
+                # 先检查是否是媒体消息，因为媒体消息可能同时包含文本（比如分享多个媒体时）
+                if event.media:
+                    if hasattr(event.media, 'document') or hasattr(event.media,'photo'):
+                        filename=getFilename(event)
+                        if ( path.exists("{0}/{1}.{2}".format(tempFolder,filename,TELEGRAM_DAEMON_TEMP_SUFFIX)) or path.exists("{0}/{1}".format(downloadFolder,filename)) ) and duplicates == "ignore":
+                            message=await event.reply("{0} already exists. Ignoring it.".format(filename))
+                            logger.info(f"Ignoring duplicate file: {filename}")
+                        else:
+                            message=await event.reply("{0} added to queue".format(filename))
+                        queue_item = [event, message]
+                        await queue.put(queue_item)
+                        async with queue_lock:
+                            queue_items.append(queue_item)
+                        logger.info(f"Added file to queue: {filename}")
+                            
+                        # Send WebSocket notifications
+                        socketio.emit('new_task', {
+                            'filename': filename,
+                            'status': 'queued',
+                            'downloadTime': time.strftime('%Y-%m-%d %H:%M:%S')
+                        })
+                        # Update status
+                        emit_status_update()
+                    else:
+                        message=await event.reply("That is not downloadable. Try to send it as a file.")
+                        logger.info(f"Received non-downloadable media: {type(event.media)}")
+                # 只有当消息不是媒体消息时，才检查是否是命令
+                elif event.message:
                     command = event.message.message
                     command = command.lower()
                     logger.info(f"Received command: {command}")
@@ -900,31 +933,6 @@ try:
 
                     await log_reply(event, output)
 
-                if event.media:
-                    if hasattr(event.media, 'document') or hasattr(event.media,'photo'):
-                        filename=getFilename(event)
-                        if ( path.exists("{0}/{1}.{2}".format(tempFolder,filename,TELEGRAM_DAEMON_TEMP_SUFFIX)) or path.exists("{0}/{1}".format(downloadFolder,filename)) ) and duplicates == "ignore":
-                            message=await event.reply("{0} already exists. Ignoring it.".format(filename))
-                            logger.info(f"Ignoring duplicate file: {filename}")
-                        else:
-                            message=await event.reply("{0} added to queue".format(filename))
-                            queue_item = [event, message]
-                            await queue.put(queue_item)
-                            queue_items.append(queue_item)
-                            logger.info(f"Added file to queue: {filename}")
-                            
-                            # Send WebSocket notifications
-                            socketio.emit('new_task', {
-                                'filename': filename,
-                                'status': 'queued',
-                                'downloadTime': time.strftime('%Y-%m-%d %H:%M:%S')
-                            })
-                            # Update status
-                            emit_status_update()
-                    else:
-                        message=await event.reply("That is not downloadable. Try to send it as a file.")
-                        logger.info(f"Received non-downloadable media: {type(event.media)}")
-
             except (OSError, IOError, ValueError, TypeError) as e:
                     logger.error(f'Events handler error: {e}', exc_info=True)
 
@@ -934,8 +942,9 @@ try:
                 try:
                     element = await queue.get()
                     # 从队列跟踪列表中移除元素
-                    if element in queue_items:
-                        queue_items.remove(element)
+                    async with queue_lock:
+                        if element in queue_items:
+                            queue_items.remove(element)
                     event=element[0]
                     message=element[1]
                     # Update status after removing from queue
@@ -974,12 +983,13 @@ try:
 
                     # Insert download record into database
                     download_path = os.path.join(category_folder, filename)
-                    cursor.execute('''
-                    INSERT INTO downloads (filename, file_type, status, size, progress, download_path)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ''', (filename, file_category, 'downloading', size, 0.0, download_path))
-                    conn.commit()
-                    download_id = cursor.lastrowid
+                    async with db_lock:
+                        cursor.execute('''
+                        INSERT INTO downloads (filename, file_type, status, size, progress, download_path)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ''', (filename, file_category, 'downloading', size, 0.0, download_path))
+                        conn.commit()
+                        download_id = cursor.lastrowid
                     logger.info(f"Inserted download record: ID={download_id}, Status=downloading")
 
                     await log_reply(
@@ -1005,10 +1015,11 @@ try:
                                 lastUpdate = currentTime
                         
                         # Update progress in database
-                        cursor.execute('''
-                        UPDATE downloads SET progress = ? WHERE id = ?
-                        ''', (percentage, download_id))
-                        conn.commit()
+                        with sync_db_lock:
+                            cursor.execute('''
+                            UPDATE downloads SET progress = ? WHERE id = ?
+                            ''', (percentage, download_id))
+                            conn.commit()
                         if percentage % 10 == 0:  # Log every 10% progress
                             logger.info(f"Download progress: {filename} - {percentage}% ({received}/{total} bytes)")
                         
@@ -1025,17 +1036,33 @@ try:
                         if percentage == 0.0:
                             emit_status_update()
 
-                    await client.download_media(event.message, "{0}/{1}.{2}".format(tempFolder, filename, TELEGRAM_DAEMON_TEMP_SUFFIX), progress_callback = download_callback)
-                    await set_progress(filename, message, 100, 100)
-                    move("{0}/{1}.{2}".format(tempFolder, filename, TELEGRAM_DAEMON_TEMP_SUFFIX), download_path)
+                    # 添加超时处理，防止下载卡住
+                    try:
+                        await asyncio.wait_for(
+                            client.download_media(
+                                event.message, 
+                                "{0}/{1}.{2}".format(tempFolder, filename, TELEGRAM_DAEMON_TEMP_SUFFIX), 
+                                progress_callback = download_callback
+                            ),
+                            timeout=3600  # 1小时超时
+                        )
+                        await set_progress(filename, message, 100, 100)
+                        move("{0}/{1}.{2}".format(tempFolder, filename, TELEGRAM_DAEMON_TEMP_SUFFIX), download_path)
+                    except asyncio.TimeoutError:
+                        # 清理临时文件
+                        temp_file_path = "{0}/{1}.{2}".format(tempFolder, filename, TELEGRAM_DAEMON_TEMP_SUFFIX)
+                        if os.path.exists(temp_file_path):
+                            os.remove(temp_file_path)
+                        raise
                     await log_reply(message, "{0} ready in {1}".format(filename, file_category))
                     logger.info(f"Download completed: {filename} saved to {download_path}")
 
                     # Update download record as completed
-                    cursor.execute('''
-                    UPDATE downloads SET status = ?, progress = 100.0, end_time = CURRENT_TIMESTAMP WHERE id = ?
-                    ''', ('completed', download_id))
-                    conn.commit()
+                    async with db_lock:
+                        cursor.execute('''
+                        UPDATE downloads SET status = ?, progress = 100.0, end_time = CURRENT_TIMESTAMP WHERE id = ?
+                        ''', ('completed', download_id))
+                        conn.commit()
                     logger.info(f"Updated download record: ID={download_id}, Status=completed")
 
                     # Update status after download completes
@@ -1050,10 +1077,11 @@ try:
                         
                         # Update download record as failed
                         if download_id:
-                            cursor.execute('''
-                            UPDATE downloads SET status = ?, error_message = ?, end_time = CURRENT_TIMESTAMP WHERE id = ?
-                            ''', ('failed', error_msg, download_id))
-                            conn.commit()
+                            async with db_lock:
+                                cursor.execute('''
+                                UPDATE downloads SET status = ?, error_message = ?, end_time = CURRENT_TIMESTAMP WHERE id = ?
+                                ''', ('failed', error_msg, download_id))
+                                conn.commit()
                             logger.info(f"Updated download record: ID={download_id}, Status=failed")
                     except Exception as reply_error:
                         logger.error(f'Error sending reply: {reply_error}')
