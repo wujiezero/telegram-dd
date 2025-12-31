@@ -790,9 +790,19 @@ try:
         # 用于保护数据库操作的同步锁（用于回调函数）
         sync_db_lock = threading.Lock()
         
-        # 创建队列和队列跟踪列表
-        queue = asyncio.Queue()
+        # 创建多个队列，分别用于不同类型的文件
+        photo_queue = asyncio.Queue()
+        video_queue = asyncio.Queue()
+        other_queue = asyncio.Queue()
+        
+        # 为每个队列创建跟踪列表
+        photo_queue_items = []
+        video_queue_items = []
+        other_queue_items = []
+        
+        # 合并所有队列项用于命令查询
         queue_items = []
+        
         peerChannel = PeerChannel(channel_id)
         
         # Link web variables to local variables
@@ -851,20 +861,41 @@ try:
                             logger.info(f"Ignoring duplicate file: {filename}")
                         else:
                             message=await event.reply("{0} added to queue".format(filename))
-                        queue_item = [event, message]
-                        await queue.put(queue_item)
-                        async with queue_lock:
-                            queue_items.append(queue_item)
-                        logger.info(f"Added file to queue: {filename}")
+                            queue_item = [event, message]
                             
-                        # Send WebSocket notifications
-                        socketio.emit('new_task', {
-                            'filename': filename,
-                            'status': 'queued',
-                            'downloadTime': time.strftime('%Y-%m-%d %H:%M:%S')
-                        })
-                        # Update status
-                        emit_status_update()
+                            # 根据文件类型决定放入哪个队列
+                            is_photo = hasattr(event.media, 'photo')
+                            is_video = False
+                            if not is_photo and hasattr(event.media, 'document'):
+                                for attribute in event.media.document.attributes:
+                                    if isinstance(attribute, DocumentAttributeVideo):
+                                        is_video = True
+                                        break
+                            
+                            async with queue_lock:
+                                if is_photo:
+                                    await photo_queue.put(queue_item)
+                                    photo_queue_items.append(queue_item)
+                                    queue_items = photo_queue_items + video_queue_items + other_queue_items
+                                elif is_video:
+                                    await video_queue.put(queue_item)
+                                    video_queue_items.append(queue_item)
+                                    queue_items = photo_queue_items + video_queue_items + other_queue_items
+                                else:
+                                    await other_queue.put(queue_item)
+                                    other_queue_items.append(queue_item)
+                                    queue_items = photo_queue_items + video_queue_items + other_queue_items
+                            
+                            logger.info(f"Added file to queue: {filename}, type: {'photo' if is_photo else 'video' if is_video else 'other'}")
+                            
+                            # Send WebSocket notifications
+                            socketio.emit('new_task', {
+                                'filename': filename,
+                                'status': 'queued',
+                                'downloadTime': time.strftime('%Y-%m-%d %H:%M:%S')
+                            })
+                            # Update status
+                            emit_status_update()
                     else:
                         message=await event.reply("That is not downloadable. Try to send it as a file.")
                         logger.info(f"Received non-downloadable media: {type(event.media)}")
@@ -936,15 +967,19 @@ try:
             except (OSError, IOError, ValueError, TypeError) as e:
                     logger.error(f'Events handler error: {e}', exc_info=True)
 
-        async def worker():
+        async def worker(worker_queue, queue_items_list):
+            """Worker函数，处理特定类型的队列"""
             while True:
                 download_id = None
                 try:
-                    element = await queue.get()
+                    element = await worker_queue.get()
                     # 从队列跟踪列表中移除元素
                     async with queue_lock:
-                        if element in queue_items:
-                            queue_items.remove(element)
+                        if element in queue_items_list:
+                            queue_items_list.remove(element)
+                        # 更新合并后的队列列表
+                        nonlocal queue_items
+                        queue_items = photo_queue_items + video_queue_items + other_queue_items
                     event=element[0]
                     message=element[1]
                     # Update status after removing from queue
@@ -1068,7 +1103,7 @@ try:
                     # Update status after download completes
                     emit_status_update()
                     
-                    queue.task_done()
+                    worker_queue.task_done()
                 except (OSError, IOError, ValueError, TypeError, asyncio.TimeoutError) as e:
                     try: 
                         error_msg = str(e)
@@ -1088,13 +1123,40 @@ try:
                     logger.error(f'Queue worker error: {e}', exc_info=True)
                     # Update status after download fails
                     emit_status_update()
-                    queue.task_done()
+                    worker_queue.task_done()
         
         tasks = []
         loop = asyncio.get_event_loop()
-        for i in range(worker_count):
-            task = loop.create_task(worker())
+        
+        # 根据用户要求分配worker：至少1个图片worker，至少1个其他类型worker，剩余的为视频worker
+        if worker_count < 3:
+            # 如果worker数不足3，每个类型至少1个
+            photo_workers = 1
+            other_workers = 1
+            video_workers = max(0, worker_count - 2)
+        else:
+            # 至少1个图片worker，至少1个其他类型worker，剩余的为视频worker
+            photo_workers = 1
+            other_workers = 1
+            video_workers = worker_count - 2
+        
+        logger.info(f"Worker分配：图片={photo_workers}, 视频={video_workers}, 其他={other_workers}")
+        
+        # 创建图片worker
+        for i in range(photo_workers):
+            task = loop.create_task(worker(photo_queue, photo_queue_items))
             tasks.append(task)
+        
+        # 创建视频worker
+        for i in range(video_workers):
+            task = loop.create_task(worker(video_queue, video_queue_items))
+            tasks.append(task)
+        
+        # 创建其他类型worker
+        for i in range(other_workers):
+            task = loop.create_task(worker(other_queue, other_queue_items))
+            tasks.append(task)
+        
         await sendHelloMessage(client, peerChannel)
         await client.run_until_disconnected()
         for task in tasks:
