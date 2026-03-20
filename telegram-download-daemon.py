@@ -62,6 +62,7 @@ TELEGRAM_DAEMON_PROXY_PASSWORD=getenv("TELEGRAM_DAEMON_PROXY_PASSWORD")
 # 可配置参数
 TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT=int(getenv("TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT", "3600"))  # 下载超时，默认1小时
 TELEGRAM_DAEMON_UPDATE_FREQUENCY=int(getenv("TELEGRAM_DAEMON_UPDATE_FREQUENCY", "10"))  # 进度更新频率，默认10秒
+TELEGRAM_DAEMON_START_TIMEOUT=int(getenv("TELEGRAM_DAEMON_START_TIMEOUT", "120"))  # 开始下载超时，默认2分钟
 
 parser = argparse.ArgumentParser(
     description="Script to download files from a Telegram Channel.")
@@ -164,6 +165,7 @@ duplicates=args.duplicates
 worker_count = args.workers
 updateFrequency = TELEGRAM_DAEMON_UPDATE_FREQUENCY
 download_timeout = TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT
+start_timeout = TELEGRAM_DAEMON_START_TIMEOUT
 lastUpdate = 0
 
 if not tempFolder:
@@ -900,7 +902,7 @@ try:
     logger.info(f"API ID: {api_id}, Channel ID: {channel_id}")
     logger.info(f"Download folder: {downloadFolder}, Temp folder: {tempFolder}")
     logger.info(f"Worker count: {worker_count}")
-    logger.info(f"Download timeout: {download_timeout}s, Update frequency: {updateFrequency}s")
+    logger.info(f"Download timeout: {download_timeout}s, Start timeout: {start_timeout}s, Update frequency: {updateFrequency}s")
     
     # 清理残留的临时文件
     cleanup_temp_files()
@@ -1262,23 +1264,66 @@ try:
                             emit_status_update()
 
                     # 添加超时处理，防止下载卡住
+                    # 使用两层超时：开始超时 + 总下载超时
+                    download_started = [False]  # 使用列表让闭包能修改
+                    
+                    def check_start_callback(received, total):
+                        if received > 0:
+                            download_started[0] = True
+                        download_callback(received, total)
+                    
                     try:
-                        await asyncio.wait_for(
+                        # 创建下载任务
+                        download_task = asyncio.create_task(
                             client.download_media(
                                 event.message, 
                                 "{0}/{1}.{2}".format(tempFolder, filename, TELEGRAM_DAEMON_TEMP_SUFFIX), 
-                                progress_callback = download_callback
-                            ),
-                            timeout=download_timeout  # 可配置的下载超时
+                                progress_callback = check_start_callback
+                            )
                         )
+                        
+                        # 等待下载开始或超时
+                        start_time = time.time()
+                        while not download_started[0] and (time.time() - start_time) < start_timeout:
+                            if download_task.done():
+                                break
+                            await asyncio.sleep(1)
+                        
+                        # 如果下载没有在 start_timeout 内开始，取消任务
+                        if not download_started[0] and not download_task.done():
+                            download_task.cancel()
+                            try:
+                                await download_task
+                            except asyncio.CancelledError:
+                                pass
+                            raise asyncio.TimeoutError(f"Download did not start within {start_timeout} seconds")
+                        
+                        # 等待下载完成或总超时
+                        remaining_timeout = download_timeout - (time.time() - start_time) if download_started[0] else download_timeout
+                        try:
+                            await asyncio.wait_for(download_task, timeout=remaining_timeout)
+                        except asyncio.TimeoutError:
+                            download_task.cancel()
+                            try:
+                                await download_task
+                            except asyncio.CancelledError:
+                                pass
+                            raise
+                        
                         await set_progress(filename, message, 100, 100)
                         move("{0}/{1}.{2}".format(tempFolder, filename, TELEGRAM_DAEMON_TEMP_SUFFIX), download_path)
-                    except asyncio.TimeoutError:
+                    except asyncio.TimeoutError as e:
                         # 清理临时文件
                         temp_file_path = "{0}/{1}.{2}".format(tempFolder, filename, TELEGRAM_DAEMON_TEMP_SUFFIX)
                         if os.path.exists(temp_file_path):
                             os.remove(temp_file_path)
                         raise
+                    except asyncio.CancelledError:
+                        # 清理临时文件
+                        temp_file_path = "{0}/{1}.{2}".format(tempFolder, filename, TELEGRAM_DAEMON_TEMP_SUFFIX)
+                        if os.path.exists(temp_file_path):
+                            os.remove(temp_file_path)
+                        raise asyncio.TimeoutError("Download was cancelled")
                     await log_reply(message, "{0} ready in {1}".format(filename, file_category))
                     logger.info(f"Download completed: {filename} saved to {download_path}")
 
@@ -1300,9 +1345,10 @@ try:
                     emit_status_update()
                     
                     worker_queue.task_done()
-                except (OSError, IOError, ValueError, TypeError, asyncio.TimeoutError) as e:
+                except Exception as e:
+                    # 捕获所有异常，确保任务不会永久卡住
+                    error_msg = str(e)
                     try: 
-                        error_msg = str(e)
                         await log_reply(message, f"Error: {error_msg}") # If it failed, inform the user about it.
                         logger.error(f"Download failed: {filename} - {error_msg}")
                         
