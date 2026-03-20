@@ -848,6 +848,7 @@
                     downloadTime: task.start_time,
                     progress: task.progress + '%',
                     size: task.size || 0,
+                    thumbnailPath: task.thumbnail_path,
                     isRealTime: false
                 };
             });
@@ -975,18 +976,28 @@
                     }
 
                     taskElement.innerHTML = `
-                        <div class="task-header">
-                            <div class="task-name">${task.filename}</div>
-                            <span class="task-status status-${task.status}">${task.status}</span>
-                        </div>
-                        <div class="task-meta">
-                            <span>Type: ${task.type}</span>
-                            <span>Size: ${formatFileSize(task.size)}</span>
-                            <span>Download Time: ${task.downloadTime}</span>
-                        </div>
-                        <div class="task-progress">
-                            ${task.progress}
-                            ${progressBarHtml}
+                        <div class="task-content" style="display: flex; gap: 15px;">
+                            <div class="task-thumbnail" style="flex-shrink: 0;">
+                                ${task.thumbnailPath ? 
+                                    `<img src="/api/thumbnail?task_id=${task.id}" alt="thumbnail" style="width: 60px; height: 60px; object-fit: cover; border-radius: 8px; background: rgba(255,255,255,0.1);">` :
+                                    `<div style="width: 60px; height: 60px; background: rgba(255,255,255,0.1); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 1.5rem;">📄</div>`
+                                }
+                            </div>
+                            <div class="task-info" style="flex: 1;">
+                                <div class="task-header">
+                                    <div class="task-name">${task.filename}</div>
+                                    <span class="task-status status-${task.status}">${task.status}</span>
+                                </div>
+                                <div class="task-meta">
+                                    <span>Type: ${task.type}</span>
+                                    <span>Size: ${formatFileSize(task.size)}</span>
+                                    <span>Download Time: ${task.downloadTime}</span>
+                                </div>
+                                <div class="task-progress">
+                                    ${task.progress}
+                                    ${progressBarHtml}
+                                </div>
+                            </div>
                         </div>
                         <div class="task-actions">
                             <button class="task-btn download-btn" onclick="downloadFile('${task.id}', '${encodeURIComponent(task.filename)}')" ${task.status === 'downloading' ? 'disabled' : ''}>

@@ -262,11 +262,20 @@ try:
         size INTEGER DEFAULT 0,
         progress REAL DEFAULT 0.0,
         download_path TEXT,
+        thumbnail_path TEXT,
         start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         end_time TIMESTAMP,
         error_message TEXT
     )
     ''')
+    
+    # 检查并添加 thumbnail_path 列（升级旧数据库）
+    try:
+        cursor.execute("ALTER TABLE downloads ADD COLUMN thumbnail_path TEXT")
+        logger.info("Added thumbnail_path column to downloads table")
+    except sqlite3.OperationalError:
+        pass  # 列已存在
+    
     conn.commit()
     logger.info("Downloads table created or already exists")
 except Exception as e:
@@ -317,6 +326,71 @@ def cleanup_temp_files():
                 logger.info(f"Cleaned up stale temp file: {temp_file}")
     except Exception as e:
         logger.error(f"Error cleaning up temp files: {e}")
+
+def generate_thumbnail(file_path, file_category):
+    """生成缩略图（仅对图片和视频）"""
+    thumbnail_path = None
+    try:
+        if file_category == 'Pictures':
+            # 使用 PIL 生成图片缩略图
+            try:
+                from PIL import Image
+                img = Image.open(file_path)
+                # 创建缩略图目录
+                thumb_dir = os.path.join(os.path.dirname(file_path), '.thumbnails')
+                os.makedirs(thumb_dir, exist_ok=True)
+                thumb_name = os.path.basename(file_path) + '.jpg'
+                thumbnail_path = os.path.join(thumb_dir, thumb_name)
+                # 生成 200x200 的缩略图
+                img.thumbnail((200, 200))
+                img.convert('RGB').save(thumbnail_path, 'JPEG', quality=80)
+                logger.info(f"Generated thumbnail: {thumbnail_path}")
+            except ImportError:
+                logger.warning("PIL not installed, skipping thumbnail generation")
+            except Exception as e:
+                logger.error(f"Error generating thumbnail: {e}")
+        elif file_category == 'Videos':
+            # 使用 ffmpeg 生成视频缩略图
+            try:
+                thumb_dir = os.path.join(os.path.dirname(file_path), '.thumbnails')
+                os.makedirs(thumb_dir, exist_ok=True)
+                thumb_name = os.path.basename(file_path) + '.jpg'
+                thumbnail_path = os.path.join(thumb_dir, thumb_name)
+                # 使用 ffmpeg 提取第一帧
+                import subprocess
+                result = subprocess.run([
+                    'ffmpeg', '-i', file_path, '-ss', '00:00:01', 
+                    '-vframes', '1', '-vf', 'scale=200:-1',
+                    '-y', thumbnail_path
+                ], capture_output=True, timeout=30)
+                if result.returncode == 0:
+                    logger.info(f"Generated video thumbnail: {thumbnail_path}")
+                else:
+                    logger.warning(f"ffmpeg failed: {result.stderr.decode()}")
+                    thumbnail_path = None
+            except FileNotFoundError:
+                logger.warning("ffmpeg not installed, skipping video thumbnail")
+            except Exception as e:
+                logger.error(f"Error generating video thumbnail: {e}")
+                thumbnail_path = None
+    except Exception as e:
+        logger.error(f"Error in generate_thumbnail: {e}")
+    
+    return thumbnail_path
+
+def handle_interrupted_tasks():
+    """处理中断的任务：将 downloading 状态改为 interrupted"""
+    try:
+        cursor.execute('''
+            UPDATE downloads SET status = 'interrupted', error_message = 'Container restarted'
+            WHERE status = 'downloading'
+        ''')
+        conn.commit()
+        affected = cursor.rowcount
+        if affected > 0:
+            logger.info(f"Marked {affected} interrupted tasks")
+    except Exception as e:
+        logger.error(f"Error handling interrupted tasks: {e}")
 
 # End of interesting parameters
 
@@ -525,7 +599,7 @@ def api_history():
         
         # Get historical downloads with filters
         select_query = f'''
-        SELECT id, filename, file_type, status, size, progress, download_path, start_time, end_time, error_message
+        SELECT id, filename, file_type, status, size, progress, download_path, thumbnail_path, start_time, end_time, error_message
         FROM downloads
         {where_clause}
         ORDER BY start_time DESC
@@ -548,9 +622,10 @@ def api_history():
                 'size': row[4],
                 'progress': row[5],
                 'download_path': row[6],
-                'start_time': row[7],
-                'end_time': row[8],
-                'error_message': row[9]
+                'thumbnail_path': row[7],
+                'start_time': row[8],
+                'end_time': row[9],
+                'error_message': row[10]
             })
         
         # Close the local connection
@@ -718,6 +793,35 @@ def api_rename():
         logger.error(f'API rename error: {e}', exc_info=True)
         return jsonify({'error': 'Internal server error'}), 500
 
+@app.route('/api/thumbnail')
+def api_thumbnail():
+    """获取缩略图"""
+    try:
+        task_id = request.args.get('task_id', type=str)
+        if not task_id:
+            return jsonify({'error': 'Missing task_id parameter'}), 400
+        
+        actual_task_id = task_id.split('-')[-1]
+        
+        local_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        local_cursor = local_conn.cursor()
+        local_cursor.execute('SELECT thumbnail_path FROM downloads WHERE id = ?', (actual_task_id,))
+        result = local_cursor.fetchone()
+        local_cursor.close()
+        local_conn.close()
+        
+        if not result or not result[0]:
+            return jsonify({'error': 'Thumbnail not found'}), 404
+        
+        thumbnail_path = result[0]
+        if not os.path.exists(thumbnail_path):
+            return jsonify({'error': 'Thumbnail file not found'}), 404
+        
+        return send_file(thumbnail_path, mimetype='image/jpeg')
+    except Exception as e:
+        logger.error(f'API thumbnail error: {e}', exc_info=True)
+        return jsonify({'error': 'Internal server error'}), 500
+
 # Web Server Thread Function
 def run_web_server():
     logger.info("Starting web server on http://0.0.0.0:7373")
@@ -800,6 +904,9 @@ try:
     
     # 清理残留的临时文件
     cleanup_temp_files()
+    
+    # 处理中断的任务
+    handle_interrupted_tasks()
     
     # Log proxy configuration
     if proxy:
@@ -1162,13 +1269,19 @@ try:
                     await log_reply(message, "{0} ready in {1}".format(filename, file_category))
                     logger.info(f"Download completed: {filename} saved to {download_path}")
 
+                    # 获取实际文件大小
+                    actual_size = os.path.getsize(download_path)
+                    
+                    # 生成缩略图
+                    thumbnail_path = generate_thumbnail(download_path, file_category)
+                    
                     # Update download record as completed
                     async with db_lock:
                         cursor.execute('''
-                        UPDATE downloads SET status = ?, progress = 100.0, end_time = CURRENT_TIMESTAMP WHERE id = ?
-                        ''', ('completed', download_id))
+                        UPDATE downloads SET status = ?, progress = 100.0, size = ?, thumbnail_path = ?, end_time = CURRENT_TIMESTAMP WHERE id = ?
+                        ''', ('completed', actual_size, thumbnail_path, download_id))
                         conn.commit()
-                    logger.info(f"Updated download record: ID={download_id}, Status=completed")
+                    logger.info(f"Updated download record: ID={download_id}, Status=completed, Size={actual_size}")
 
                     # Update status after download completes
                     emit_status_update()
