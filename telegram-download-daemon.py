@@ -988,9 +988,11 @@ try:
             nonlocal lastUpdate
             
             async with status_lock:
+                global web_in_progress
                 if received >= total:
                     try: 
                         in_progress.pop(filename)
+                        web_in_progress = in_progress
                     except: 
                         pass
                     return
@@ -998,6 +1000,7 @@ try:
                 percentage = math.trunc(received / total * 10000) / 100
                 progress_message = "{0} % ({1} / {2})".format(percentage, received, total)
                 in_progress[filename] = progress_message
+                web_in_progress = in_progress
 
                 currentTime = time.time()
                 if (currentTime - lastUpdate) > updateFrequency:
@@ -1038,15 +1041,15 @@ try:
                             if is_photo:
                                 await photo_queue.put(queue_item)
                                 photo_queue_items.append(queue_item)
-                                queue_items = photo_queue_items + video_queue_items + other_queue_items
                             elif is_video:
                                 await video_queue.put(queue_item)
                                 video_queue_items.append(queue_item)
-                                queue_items = photo_queue_items + video_queue_items + other_queue_items
                             else:
                                 await other_queue.put(queue_item)
                                 other_queue_items.append(queue_item)
-                                queue_items = photo_queue_items + video_queue_items + other_queue_items
+                            # 同步更新 web_queue_items
+                            queue_items = photo_queue_items + video_queue_items + other_queue_items
+                            web_queue_items = queue_items
                         
                         logger.info(f"Added file to queue: {filename}, type: {'photo' if is_photo else 'video' if is_video else 'other'}")
                         
@@ -1153,6 +1156,8 @@ try:
                             queue_items_list.remove(element)
                         # 更新合并后的队列列表
                         queue_items = photo_queue_items + video_queue_items + other_queue_items
+                        # 同步更新 web_queue_items
+                        web_queue_items = queue_items
                     event=element[0]
                     message=element[1]
                     # Update status after removing from queue
@@ -1220,6 +1225,9 @@ try:
                         
                         with sync_lock:
                             in_progress[filename] = progress_message
+                            # 确保全局变量同步
+                            global web_in_progress
+                            web_in_progress = in_progress
                             
                             currentTime = time.time()
                             if (currentTime - lastUpdate) > updateFrequency:
