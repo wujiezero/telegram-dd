@@ -1054,8 +1054,9 @@ try:
                     file_category = getFileTypeCategory(filename)
                     logger.info(f"Processing file: {filename}, Category: {file_category}")
                     
-                    # Create category directory if it doesn't exist
-                    category_folder = os.path.join(downloadFolder, file_category)
+                    # Create category directory with date subfolder
+                    current_date = time.strftime('%Y-%m-%d')
+                    category_folder = os.path.join(downloadFolder, file_category, current_date)
                     if not os.path.exists(category_folder):
                         os.makedirs(category_folder)
                         logger.info(f"Created category folder: {category_folder}")
