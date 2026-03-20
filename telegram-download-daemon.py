@@ -5,15 +5,15 @@
 
 from os import getenv, path
 from shutil import move
-import subprocess
 import math
 import time
 import random
 import string
+import os
 import os.path
 import threading
 import sqlite3
-from typing import Dict, List, Any, Optional, Tuple
+import glob
 from mimetypes import guess_extension
 import socks
 from flask import Flask, jsonify, render_template_string, request, send_file
@@ -23,9 +23,6 @@ from sessionManager import getSession, saveSession
 
 from telethon import TelegramClient, events, __version__
 from telethon.tl.types import PeerChannel, DocumentAttributeFilename, DocumentAttributeVideo
-from telethon.network.connection import ConnectionTcpMTProxyRandomizedIntermediate
-from telethon.network.connection import ConnectionTcpFull
-from telethon.network.connection import ConnectionTcpObfuscated
 from telethon.sessions import StringSession
 import logging
 
@@ -61,6 +58,10 @@ TELEGRAM_DAEMON_PROXY_PORT=getenv("TELEGRAM_DAEMON_PROXY_PORT")
 TELEGRAM_DAEMON_PROXY_TYPE=getenv("TELEGRAM_DAEMON_PROXY_TYPE", "socks5")
 TELEGRAM_DAEMON_PROXY_USERNAME=getenv("TELEGRAM_DAEMON_PROXY_USERNAME")
 TELEGRAM_DAEMON_PROXY_PASSWORD=getenv("TELEGRAM_DAEMON_PROXY_PASSWORD")
+
+# 可配置参数
+TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT=int(getenv("TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT", "3600"))  # 下载超时，默认1小时
+TELEGRAM_DAEMON_UPDATE_FREQUENCY=int(getenv("TELEGRAM_DAEMON_UPDATE_FREQUENCY", "10"))  # 进度更新频率，默认10秒
 
 parser = argparse.ArgumentParser(
     description="Script to download files from a Telegram Channel.")
@@ -161,7 +162,8 @@ downloadFolder = args.dest
 tempFolder = args.temp
 duplicates=args.duplicates
 worker_count = args.workers
-updateFrequency = 10
+updateFrequency = TELEGRAM_DAEMON_UPDATE_FREQUENCY
+download_timeout = TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT
 lastUpdate = 0
 
 if not tempFolder:
@@ -178,25 +180,32 @@ if args.proxy_host and args.proxy_port:
     if proxy_type_str not in ['socks5', 'http', 'mtproxy']:
         proxy_type_str = 'socks5'  # 默认使用SOCKS5
     
-# 建议修改后的代码片段
-if args.proxy_username and args.proxy_password:
-    proxy = (
-        socks.SOCKS5,
-        args.proxy_host,
-        int(args.proxy_port),
-        False,
-        args.proxy_username,
-        args.proxy_password
-    )
-    print(f"Using proxy: socks5://{args.proxy_username}:******@{args.proxy_host}:{args.proxy_port}")
-else:
-    proxy = (
-        socks.SOCKS5,
-        args.proxy_host,
-        int(args.proxy_port),
-        False
-    )
-    print(f"Using proxy without auth: socks5://{args.proxy_host}:{args.proxy_port}")
+    # 将字符串代理类型映射到 PySocks 常量
+    proxy_type_map = {
+        'socks5': socks.SOCKS5,
+        'http': socks.HTTP,
+    }
+    proxy_type_const = proxy_type_map.get(proxy_type_str, socks.SOCKS5)
+    
+    # 根据是否有认证信息创建代理配置
+    if args.proxy_username and args.proxy_password:
+        proxy = (
+            proxy_type_const,
+            args.proxy_host,
+            int(args.proxy_port),
+            False,
+            args.proxy_username,
+            args.proxy_password
+        )
+        print(f"Using proxy: {proxy_type_str}://{args.proxy_username}:******@{args.proxy_host}:{args.proxy_port}")
+    else:
+        proxy = (
+            proxy_type_const,
+            args.proxy_host,
+            int(args.proxy_port),
+            False
+        )
+        print(f"Using proxy without auth: {proxy_type_str}://{args.proxy_host}:{args.proxy_port}")
 
 # File Type Categorization Rules
 FILE_TYPE_RULES = {
@@ -264,6 +273,51 @@ except Exception as e:
     logger.error(f"Database initialization error: {e}")
     raise
 
+# Database helper functions
+def get_db_connection():
+    """获取数据库连接（线程安全）"""
+    return sqlite3.connect(DB_PATH, check_same_thread=False)
+
+def db_execute_query(query, params=(), fetch=False):
+    """执行数据库查询，支持事务"""
+    local_conn = get_db_connection()
+    local_cursor = local_conn.cursor()
+    try:
+        local_cursor.execute(query, params)
+        if fetch:
+            result = local_cursor.fetchall()
+        else:
+            result = local_cursor.lastrowid
+        local_conn.commit()
+        return result
+    finally:
+        local_cursor.close()
+        local_conn.close()
+
+def db_execute_many(query, params_list):
+    """批量执行数据库操作"""
+    local_conn = get_db_connection()
+    local_cursor = local_conn.cursor()
+    try:
+        local_cursor.executemany(query, params_list)
+        local_conn.commit()
+    finally:
+        local_cursor.close()
+        local_conn.close()
+
+def cleanup_temp_files():
+    """清理残留的临时文件"""
+    try:
+        temp_files = glob.glob(os.path.join(tempFolder, f"*.{TELEGRAM_DAEMON_TEMP_SUFFIX}"))
+        for temp_file in temp_files:
+            # 检查文件是否超过24小时（可能是残留文件）
+            file_age = time.time() - os.path.getmtime(temp_file)
+            if file_age > 86400:  # 24小时
+                os.remove(temp_file)
+                logger.info(f"Cleaned up stale temp file: {temp_file}")
+    except Exception as e:
+        logger.error(f"Error cleaning up temp files: {e}")
+
 # End of interesting parameters
 
 # Web Server Configuration
@@ -283,17 +337,12 @@ telegram_user_info = None
 # Function to emit status update event
 def emit_status_update():
     try:
-        # Calculate uptime (not needed for status update)
-        
         # Get total historical tasks count
         total_tasks = 0
         try:
-            local_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-            local_cursor = local_conn.cursor()
-            local_cursor.execute('SELECT COUNT(*) FROM downloads')
-            total_tasks = local_cursor.fetchone()[0]
-            local_cursor.close()
-            local_conn.close()
+            result = db_execute_query('SELECT COUNT(*) FROM downloads', fetch=True)
+            if result:
+                total_tasks = result[0][0]
         except Exception as e:
             logger.error(f'Error getting total tasks count: {e}', exc_info=True)
         
@@ -747,6 +796,10 @@ try:
     logger.info(f"API ID: {api_id}, Channel ID: {channel_id}")
     logger.info(f"Download folder: {downloadFolder}, Temp folder: {tempFolder}")
     logger.info(f"Worker count: {worker_count}")
+    logger.info(f"Download timeout: {download_timeout}s, Update frequency: {updateFrequency}s")
+    
+    # 清理残留的临时文件
+    cleanup_temp_files()
     
     # Log proxy configuration
     if proxy:
@@ -852,55 +905,63 @@ try:
             logger.debug(f"Received new message event: {event}")
             
             try:
-                # 先检查是否是媒体消息，因为媒体消息可能同时包含文本（比如分享多个媒体时）
-                if event.media:
-                    if hasattr(event.media, 'document') or hasattr(event.media,'photo'):
-                        filename=getFilename(event)
-                        if ( path.exists("{0}/{1}.{2}".format(tempFolder,filename,TELEGRAM_DAEMON_TEMP_SUFFIX)) or path.exists("{0}/{1}".format(downloadFolder,filename)) ) and duplicates == "ignore":
-                            message=await event.reply("{0} already exists. Ignoring it.".format(filename))
-                            logger.info(f"Ignoring duplicate file: {filename}")
-                        else:
-                            message=await event.reply("{0} added to queue".format(filename))
-                            queue_item = [event, message]
-                            
-                            # 根据文件类型决定放入哪个队列
-                            is_photo = hasattr(event.media, 'photo')
-                            is_video = False
-                            if not is_photo and hasattr(event.media, 'document'):
-                                for attribute in event.media.document.attributes:
-                                    if isinstance(attribute, DocumentAttributeVideo):
-                                        is_video = True
-                                        break
-                            
-                            async with queue_lock:
-                                if is_photo:
-                                    await photo_queue.put(queue_item)
-                                    photo_queue_items.append(queue_item)
-                                    queue_items = photo_queue_items + video_queue_items + other_queue_items
-                                elif is_video:
-                                    await video_queue.put(queue_item)
-                                    video_queue_items.append(queue_item)
-                                    queue_items = photo_queue_items + video_queue_items + other_queue_items
-                                else:
-                                    await other_queue.put(queue_item)
-                                    other_queue_items.append(queue_item)
-                                    queue_items = photo_queue_items + video_queue_items + other_queue_items
-                            
-                            logger.info(f"Added file to queue: {filename}, type: {'photo' if is_photo else 'video' if is_video else 'other'}")
-                            
-                            # Send WebSocket notifications
-                            socketio.emit('new_task', {
-                                'filename': filename,
-                                'status': 'queued',
-                                'downloadTime': time.strftime('%Y-%m-%d %H:%M:%S')
-                            })
-                            # Update status
-                            emit_status_update()
+                # 检查是否是可下载的媒体消息
+                # 使用 event.photo 和 event.document 快捷方式，更可靠
+                is_photo = event.photo is not None
+                is_document = event.document is not None
+                
+                if is_photo or is_document:
+                    filename=getFilename(event)
+                    if ( path.exists("{0}/{1}.{2}".format(tempFolder,filename,TELEGRAM_DAEMON_TEMP_SUFFIX)) or path.exists("{0}/{1}".format(downloadFolder,filename)) ) and duplicates == "ignore":
+                        message=await event.reply("{0} already exists. Ignoring it.".format(filename))
+                        logger.info(f"Ignoring duplicate file: {filename}")
                     else:
-                        message=await event.reply("That is not downloadable. Try to send it as a file.")
-                        logger.info(f"Received non-downloadable media: {type(event.media)}")
-                # 只有当消息不是媒体消息时，才检查是否是命令
-                elif event.message:
+                        message=await event.reply("{0} added to queue".format(filename))
+                        queue_item = [event, message]
+                        
+                        # 根据文件类型决定放入哪个队列
+                        is_video = False
+                        if is_document:
+                            for attribute in event.document.attributes:
+                                if isinstance(attribute, DocumentAttributeVideo):
+                                    is_video = True
+                                    break
+                        
+                        async with queue_lock:
+                            if is_photo:
+                                await photo_queue.put(queue_item)
+                                photo_queue_items.append(queue_item)
+                                queue_items = photo_queue_items + video_queue_items + other_queue_items
+                            elif is_video:
+                                await video_queue.put(queue_item)
+                                video_queue_items.append(queue_item)
+                                queue_items = photo_queue_items + video_queue_items + other_queue_items
+                            else:
+                                await other_queue.put(queue_item)
+                                other_queue_items.append(queue_item)
+                                queue_items = photo_queue_items + video_queue_items + other_queue_items
+                        
+                        logger.info(f"Added file to queue: {filename}, type: {'photo' if is_photo else 'video' if is_video else 'other'}")
+                        
+                        # Send WebSocket notifications
+                        socketio.emit('new_task', {
+                            'filename': filename,
+                            'status': 'queued',
+                            'downloadTime': time.strftime('%Y-%m-%d %H:%M:%S')
+                        })
+                        # Update status
+                        emit_status_update()
+                elif event.media:
+                    # 有 media 但不是 photo 或 document
+                    message=await event.reply("That is not downloadable. Try to send it as a file.")
+                    logger.info(f"Received non-downloadable media: {type(event.media)}")
+                # 检查是否是相册分组消息（grouped_id），这类消息没有 media 但也不应该当作命令
+                elif hasattr(event.message, 'grouped_id') and event.message.grouped_id is not None:
+                    # 相册分组消息，跳过处理
+                    logger.debug(f"Skipping grouped message with grouped_id: {event.message.grouped_id}")
+                    return
+                # 只有当消息不是媒体消息也不是分组消息时，才检查是否是命令
+                elif event.message and event.message.message:
                     command = event.message.message
                     command = command.lower()
                     logger.info(f"Received command: {command}")
@@ -969,6 +1030,7 @@ try:
 
         async def worker(worker_queue, queue_items_list):
             """Worker函数，处理特定类型的队列"""
+            nonlocal queue_items
             while True:
                 download_id = None
                 try:
@@ -978,7 +1040,6 @@ try:
                         if element in queue_items_list:
                             queue_items_list.remove(element)
                         # 更新合并后的队列列表
-                        nonlocal queue_items
                         queue_items = photo_queue_items + video_queue_items + other_queue_items
                     event=element[0]
                     message=element[1]
@@ -1032,11 +1093,15 @@ try:
                         "Downloading file {0} ({1} bytes) to {2}".format(filename, size, file_category)
                     )
 
+                    # 使用可变容器存储 download_id，让闭包能修改它
+                    download_id_container = [download_id]
+                    
                     # 进度回调函数不能是异步的，所以我们需要使用一个同步的包装器
                     def download_callback(received, total):
                         # 由于回调是同步的，我们不能直接await异步函数
                         # 但我们可以记录进度，然后在合适的时候更新
-                        nonlocal lastUpdate, download_id
+                        nonlocal lastUpdate
+                        current_download_id = download_id_container[0]
                         percentage = math.trunc(received / total * 10000) / 100
                         progress_message = "{0} % ({1} / {2})".format(percentage, received, total)
                         
@@ -1050,13 +1115,17 @@ try:
                                 lastUpdate = currentTime
                         
                         # Update progress in database
-                        with sync_db_lock:
-                            cursor.execute('''
-                            UPDATE downloads SET progress = ? WHERE id = ?
-                            ''', (percentage, download_id))
-                            conn.commit()
-                        if percentage % 10 == 0:  # Log every 10% progress
-                            logger.info(f"Download progress: {filename} - {percentage}% ({received}/{total} bytes)")
+                        if current_download_id:
+                            with sync_db_lock:
+                                cursor.execute('''
+                                UPDATE downloads SET progress = ? WHERE id = ?
+                                ''', (percentage, current_download_id))
+                                conn.commit()
+                        
+                        # 每10%记录一次进度（使用整数判断避免浮点精度问题）
+                        progress_int = int(percentage)
+                        if progress_int > 0 and progress_int % 10 == 0 and abs(percentage - progress_int) < 0.01:
+                            logger.info(f"Download progress: {filename} - {progress_int}% ({received}/{total} bytes)")
                         
                         # Send WebSocket notification for download progress
                         socketio.emit('download_progress', {
@@ -1068,7 +1137,7 @@ try:
                         })
                         
                         # Update status when download starts
-                        if percentage == 0.0:
+                        if received > 0 and received < total * 0.01:  # 开始下载时
                             emit_status_update()
 
                     # 添加超时处理，防止下载卡住
@@ -1079,7 +1148,7 @@ try:
                                 "{0}/{1}.{2}".format(tempFolder, filename, TELEGRAM_DAEMON_TEMP_SUFFIX), 
                                 progress_callback = download_callback
                             ),
-                            timeout=3600  # 1小时超时
+                            timeout=download_timeout  # 可配置的下载超时
                         )
                         await set_progress(filename, message, 100, 100)
                         move("{0}/{1}.{2}".format(tempFolder, filename, TELEGRAM_DAEMON_TEMP_SUFFIX), download_path)
@@ -1128,17 +1197,17 @@ try:
         tasks = []
         loop = asyncio.get_event_loop()
         
-        # 根据用户要求分配worker：至少1个图片worker，至少1个其他类型worker，剩余的为视频worker
+        # 根据用户要求分配worker：每种类型至少1个
         if worker_count < 3:
-            # 如果worker数不足3，每个类型至少1个
+            # 如果worker数不足3，平均分配，确保每种类型至少1个
             photo_workers = 1
-            other_workers = 1
-            video_workers = max(0, worker_count - 2)
+            video_workers = 1
+            other_workers = max(1, worker_count - 2)
         else:
             # 至少1个图片worker，至少1个其他类型worker，剩余的为视频worker
             photo_workers = 1
             other_workers = 1
-            video_workers = worker_count - 2
+            video_workers = max(1, worker_count - 2)
         
         logger.info(f"Worker分配：图片={photo_workers}, 视频={video_workers}, 其他={other_workers}")
         
