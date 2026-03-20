@@ -1402,18 +1402,13 @@ try:
                             logger.info(f"Updated download record: ID={download_id}, Status=failed after {current_retry} retries")
                         
                         # 发送失败通知到 Telegram
-                        failure_msg = f"❌ 下载失败（已重试{max_retries}次）\n文件: {filename}\n原因: {error_msg[:200]}"
-                        try:
-                            await log_reply(message, failure_msg)
-                            # 如果配置了通知，发送到频道
-                            if notify_failure:
-                                try:
-                                    entity = await client.get_entity(peerChannel)
-                                    await client.send_message(entity, failure_msg)
-                                except Exception as notify_error:
-                                    logger.error(f"Failed to send notification: {notify_error}")
-                        except Exception as reply_error:
-                            logger.error(f'Error sending reply: {reply_error}')
+                        if notify_failure:
+                            failure_msg = f"❌ 下载失败（已重试{max_retries}次）\n原因: {error_msg[:200]}"
+                            try:
+                                # 回复原始文件消息，让用户直观看到失败的文件
+                                await event.reply(failure_msg)
+                            except Exception as reply_error:
+                                logger.error(f'Error sending failure reply: {reply_error}')
                     
                     # Update status after download fails
                     emit_status_update()
