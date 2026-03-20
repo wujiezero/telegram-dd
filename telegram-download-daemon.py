@@ -1069,6 +1069,11 @@ try:
                     return
                 # 只有当消息不是媒体消息也不是分组消息时，才检查是否是命令
                 elif event.message and event.message.message:
+                    # 忽略自己发送的消息（避免把回复消息当命令处理）
+                    if event.out:
+                        logger.debug(f"Ignoring outgoing message: {event.message.message[:50]}...")
+                        return
+                    
                     command = event.message.message
                     command = command.lower()
                     logger.info(f"Received command: {command}")
