@@ -63,6 +63,8 @@ TELEGRAM_DAEMON_PROXY_PASSWORD=getenv("TELEGRAM_DAEMON_PROXY_PASSWORD")
 TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT=int(getenv("TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT", "3600"))  # 下载超时，默认1小时
 TELEGRAM_DAEMON_UPDATE_FREQUENCY=int(getenv("TELEGRAM_DAEMON_UPDATE_FREQUENCY", "10"))  # 进度更新频率，默认10秒
 TELEGRAM_DAEMON_START_TIMEOUT=int(getenv("TELEGRAM_DAEMON_START_TIMEOUT", "120"))  # 开始下载超时，默认2分钟
+TELEGRAM_DAEMON_MAX_RETRIES=int(getenv("TELEGRAM_DAEMON_MAX_RETRIES", "3"))  # 最大重试次数，默认3次
+TELEGRAM_DAEMON_NOTIFY_FAILURE=bool(int(getenv("TELEGRAM_DAEMON_NOTIFY_FAILURE", "1")))  # 失败通知，默认开启
 
 parser = argparse.ArgumentParser(
     description="Script to download files from a Telegram Channel.")
@@ -166,6 +168,8 @@ worker_count = args.workers
 updateFrequency = TELEGRAM_DAEMON_UPDATE_FREQUENCY
 download_timeout = TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT
 start_timeout = TELEGRAM_DAEMON_START_TIMEOUT
+max_retries = TELEGRAM_DAEMON_MAX_RETRIES
+notify_failure = TELEGRAM_DAEMON_NOTIFY_FAILURE
 lastUpdate = 0
 
 if not tempFolder:
@@ -265,6 +269,7 @@ try:
         progress REAL DEFAULT 0.0,
         download_path TEXT,
         thumbnail_path TEXT,
+        retry_count INTEGER DEFAULT 0,
         start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         end_time TIMESTAMP,
         error_message TEXT
@@ -275,6 +280,13 @@ try:
     try:
         cursor.execute("ALTER TABLE downloads ADD COLUMN thumbnail_path TEXT")
         logger.info("Added thumbnail_path column to downloads table")
+    except sqlite3.OperationalError:
+        pass  # 列已存在
+    
+    # 检查并添加 retry_count 列
+    try:
+        cursor.execute("ALTER TABLE downloads ADD COLUMN retry_count INTEGER DEFAULT 0")
+        logger.info("Added retry_count column to downloads table")
     except sqlite3.OperationalError:
         pass  # 列已存在
     
@@ -902,7 +914,7 @@ try:
     logger.info(f"API ID: {api_id}, Channel ID: {channel_id}")
     logger.info(f"Download folder: {downloadFolder}, Temp folder: {tempFolder}")
     logger.info(f"Worker count: {worker_count}")
-    logger.info(f"Download timeout: {download_timeout}s, Start timeout: {start_timeout}s, Update frequency: {updateFrequency}s")
+    logger.info(f"Download timeout: {download_timeout}s, Start timeout: {start_timeout}s, Update frequency: {updateFrequency}s, Max retries: {max_retries}, Notify failure: {notify_failure}")
     
     # 清理残留的临时文件
     cleanup_temp_files()
@@ -1348,21 +1360,61 @@ try:
                 except Exception as e:
                     # 捕获所有异常，确保任务不会永久卡住
                     error_msg = str(e)
-                    try: 
-                        await log_reply(message, f"Error: {error_msg}") # If it failed, inform the user about it.
-                        logger.error(f"Download failed: {filename} - {error_msg}")
-                        
-                        # Update download record as failed
+                    logger.error(f"Download failed: {filename} - {error_msg}")
+                    
+                    # 获取当前重试次数
+                    current_retry = 0
+                    if download_id:
+                        async with db_lock:
+                            cursor.execute('SELECT retry_count FROM downloads WHERE id = ?', (download_id,))
+                            result = cursor.fetchone()
+                            if result:
+                                current_retry = result[0] or 0
+                    
+                    # 检查是否可以重试
+                    if current_retry < max_retries:
+                        # 更新重试次数，状态改回 queued
+                        new_retry = current_retry + 1
                         if download_id:
                             async with db_lock:
                                 cursor.execute('''
-                                UPDATE downloads SET status = ?, error_message = ?, end_time = CURRENT_TIMESTAMP WHERE id = ?
-                                ''', ('failed', error_msg, download_id))
+                                UPDATE downloads SET status = 'queued', retry_count = ?, error_message = ? WHERE id = ?
+                                ''', (new_retry, f"Retry {new_retry}: {error_msg}", download_id))
                                 conn.commit()
-                            logger.info(f"Updated download record: ID={download_id}, Status=failed")
-                    except Exception as reply_error:
-                        logger.error(f'Error sending reply: {reply_error}')
-                    logger.error(f'Queue worker error: {e}', exc_info=True)
+                            logger.info(f"Retry {new_retry}/{max_retries} for: {filename}")
+                        
+                        # 重新加入队列
+                        await asyncio.sleep(5)  # 等待5秒后重试
+                        async with queue_lock:
+                            await worker_queue.put([event, message])
+                            queue_items_list.append([event, message])
+                            web_queue_items = photo_queue_items + video_queue_items + other_queue_items
+                        
+                        await log_reply(message, f"⚠️ Retry {new_retry}/{max_retries}: {filename}")
+                    else:
+                        # 重试次数用完，标记为失败并通知
+                        if download_id:
+                            async with db_lock:
+                                cursor.execute('''
+                                UPDATE downloads SET status = ?, error_message = ?, retry_count = ?, end_time = CURRENT_TIMESTAMP WHERE id = ?
+                                ''', ('failed', error_msg, current_retry, download_id))
+                                conn.commit()
+                            logger.info(f"Updated download record: ID={download_id}, Status=failed after {current_retry} retries")
+                        
+                        # 发送失败通知到 Telegram
+                        failure_msg = f"❌ 下载失败（已重试{max_retries}次）\n文件: {filename}\n原因: {error_msg[:200]}"
+                        try:
+                            await log_reply(message, failure_msg)
+                            # 如果配置了通知，发送到频道
+                            if notify_failure:
+                                try:
+                                    entity = await client.get_entity(peerChannel)
+                                    await client.send_message(entity, failure_msg)
+                                except Exception as notify_error:
+                                    logger.error(f"Failed to send notification: {notify_error}")
+                        except Exception as reply_error:
+                            logger.error(f'Error sending reply: {reply_error}')
+                    
                     # Update status after download fails
                     emit_status_update()
                     worker_queue.task_done()
