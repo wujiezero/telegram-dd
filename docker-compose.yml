@@ -1,7 +1,9 @@
 services:
   telegram-dd:
-    build: .
-    #image: wujiezero/telegram-dd:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      no_cache: true
     container_name: telegram-download
     read_only: true
     environment:
@@ -27,5 +29,5 @@ services:
     restart: unless-stopped
 
 volumes:
-    downloads:
-    sessions:
+  downloads:
+  sessions:

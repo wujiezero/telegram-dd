@@ -36,6 +36,7 @@ logger = logging.getLogger('telegram-download-daemon')
 import multiprocessing
 import argparse
 import asyncio
+import contextlib
 
 
 TDD_VERSION="2.0"
@@ -1296,6 +1297,66 @@ try:
         web_in_progress = in_progress
         web_queue_items = queue_items
 
+        def get_queue_target(message_obj):
+            is_photo = getattr(message_obj, 'photo', None) is not None
+            is_video = False
+            if getattr(message_obj, 'document', None):
+                for attribute in message_obj.document.attributes:
+                    if isinstance(attribute, DocumentAttributeVideo):
+                        is_video = True
+                        break
+
+            if is_photo:
+                return photo_queue, photo_queue_items, 'photo'
+            if is_video:
+                return video_queue, video_queue_items, 'video'
+            return other_queue, other_queue_items, 'other'
+
+        def rebuild_web_queue_items():
+            nonlocal queue_items
+            global web_queue_items
+            queue_items = photo_queue_items + video_queue_items + other_queue_items
+            web_queue_items = queue_items
+
+        async def push_queue_item(queue_item):
+            target_queue, target_items, queue_type = get_queue_target(queue_item[0])
+            async with queue_lock:
+                await target_queue.put(queue_item)
+                target_items.append(queue_item)
+                rebuild_web_queue_items()
+            return queue_type
+
+        async def pop_next_queue_item():
+            queue_getters = {
+                asyncio.create_task(photo_queue.get()): (photo_queue, photo_queue_items, 'photo'),
+                asyncio.create_task(video_queue.get()): (video_queue, video_queue_items, 'video'),
+                asyncio.create_task(other_queue.get()): (other_queue, other_queue_items, 'other'),
+            }
+
+            done = set()
+            pending = set()
+            try:
+                done, pending = await asyncio.wait(queue_getters.keys(), return_when=asyncio.FIRST_COMPLETED)
+                completed_task = done.pop()
+                queue_ref, queue_items_list_ref, queue_type = queue_getters[completed_task]
+                element = completed_task.result()
+
+                async with queue_lock:
+                    if element in queue_items_list_ref:
+                        queue_items_list_ref.remove(element)
+                    rebuild_web_queue_items()
+
+                return element, queue_ref, queue_items_list_ref, queue_type
+            finally:
+                for pending_task in pending:
+                    pending_task.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+                for done_task in done:
+                    if not done_task.cancelled():
+                        with contextlib.suppress(Exception):
+                            done_task.result()
+
         async def refresh_channel_info():
             global telegram_channel_info
             try:
@@ -1467,9 +1528,6 @@ try:
                 return existing_download_id
 
         async def enqueue_download_message(message_obj, notice_template="{0} added to queue", target_dir_override=None, existing_download_id=None, silent=False, recovery_note=None):
-            nonlocal queue_items
-            global web_queue_items
-
             is_photo = getattr(message_obj, 'photo', None) is not None
             is_document = getattr(message_obj, 'document', None) is not None
             if not (is_photo or is_document):
@@ -1491,28 +1549,9 @@ try:
             )
             status_message = None if silent else await message_obj.reply(notice_template.format(filename))
             queue_item = [message_obj, status_message, target_dir_override, download_id]
+            queue_type = await push_queue_item(queue_item)
 
-            is_video = False
-            if is_document:
-                for attribute in message_obj.document.attributes:
-                    if isinstance(attribute, DocumentAttributeVideo):
-                        is_video = True
-                        break
-
-            async with queue_lock:
-                if is_photo:
-                    await photo_queue.put(queue_item)
-                    photo_queue_items.append(queue_item)
-                elif is_video:
-                    await video_queue.put(queue_item)
-                    video_queue_items.append(queue_item)
-                else:
-                    await other_queue.put(queue_item)
-                    other_queue_items.append(queue_item)
-                queue_items = photo_queue_items + video_queue_items + other_queue_items
-                web_queue_items = queue_items
-
-            logger.info(f"Added file to queue: {filename}, type: {'photo' if is_photo else 'video' if is_video else 'other'}")
+            logger.info(f"Added file to queue: {filename}, type: {queue_type}")
             socketio.emit('new_task', {
                 'filename': filename,
                 'status': 'queued',
@@ -1684,23 +1723,15 @@ try:
             except (OSError, IOError, ValueError, TypeError) as e:
                     logger.error(f'Events handler error: {e}', exc_info=True)
 
-        async def worker(worker_queue, queue_items_list):
-            """Worker函数，处理特定类型的队列"""
-            nonlocal queue_items
+        async def worker(worker_id):
+            """动态Worker函数，空闲时自动从任意非空队列取任务"""
             while True:
                 download_id = None
                 filename = "unknown"
+                worker_queue = None
+                queue_items_list = None
                 try:
-                    global web_queue_items
-                    element = await worker_queue.get()
-                    # 从队列跟踪列表中移除元素
-                    async with queue_lock:
-                        if element in queue_items_list:
-                            queue_items_list.remove(element)
-                        # 更新合并后的队列列表
-                        queue_items = photo_queue_items + video_queue_items + other_queue_items
-                        # 同步更新 web_queue_items
-                        web_queue_items = queue_items
+                    element, worker_queue, queue_items_list, queue_type = await pop_next_queue_item()
                     message_obj=element[0]
                     message=element[1]
                     target_dir_override = element[2] if len(element) > 2 else None
@@ -1714,7 +1745,7 @@ try:
 
                     # Get file type category
                     file_category = getFileTypeCategory(filename)
-                    logger.info(f"Processing file: {filename}, Category: {file_category}")
+                    logger.info(f"Worker {worker_id} processing file: {filename}, QueueType: {queue_type}, Category: {file_category}")
                     
                     # Create category directory with date subfolder
                     current_date = time.strftime('%Y-%m-%d')
@@ -1960,10 +1991,7 @@ try:
                         
                         # 重新加入队列
                         await asyncio.sleep(5)  # 等待5秒后重试
-                        async with queue_lock:
-                            await worker_queue.put([message_obj, message, target_dir_override, download_id])
-                            queue_items_list.append([message_obj, message, target_dir_override, download_id])
-                            web_queue_items = photo_queue_items + video_queue_items + other_queue_items
+                        await push_queue_item([message_obj, message, target_dir_override, download_id])
                         
                         await log_reply(message, f"⚠️ Retry {new_retry}/{max_retries}: {filename}")
                     else:
@@ -1987,38 +2015,17 @@ try:
                     
                     # Update status after download fails
                     emit_status_update()
-                    worker_queue.task_done()
+                    if worker_queue is not None:
+                        worker_queue.task_done()
         
         tasks = []
         loop = asyncio.get_running_loop()
-        
-        # 根据用户要求分配worker：每种类型至少1个
-        if worker_count < 3:
-            # 如果worker数不足3，平均分配，确保每种类型至少1个
-            photo_workers = 1
-            video_workers = 1
-            other_workers = max(1, worker_count - 2)
-        else:
-            # 至少1个图片worker，至少1个其他类型worker，剩余的为视频worker
-            photo_workers = 1
-            other_workers = 1
-            video_workers = max(1, worker_count - 2)
-        
-        logger.info(f"Worker分配：图片={photo_workers}, 视频={video_workers}, 其他={other_workers}")
-        
-        # 创建图片worker
-        for i in range(photo_workers):
-            task = loop.create_task(worker(photo_queue, photo_queue_items))
-            tasks.append(task)
-        
-        # 创建视频worker
-        for i in range(video_workers):
-            task = loop.create_task(worker(video_queue, video_queue_items))
-            tasks.append(task)
-        
-        # 创建其他类型worker
-        for i in range(other_workers):
-            task = loop.create_task(worker(other_queue, other_queue_items))
+
+        dynamic_worker_count = max(1, int(worker_count))
+        logger.info(f"Worker分配：动态共享worker={dynamic_worker_count}，按队列积压自动取图/视频/其他任务")
+
+        for i in range(dynamic_worker_count):
+            task = loop.create_task(worker(i + 1))
             tasks.append(task)
         
         await sendHelloMessage(client, peerChannel)
