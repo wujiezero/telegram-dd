@@ -23,7 +23,7 @@ from sessionManager import getSession, saveSession
 
 from telethon import TelegramClient, events, __version__
 from telethon.tl.types import PeerChannel, DocumentAttributeFilename, DocumentAttributeVideo
-from telethon.sessions import StringSession
+from telethon.errors import SessionPasswordNeededError
 import logging
 
 # Set up logging
@@ -63,6 +63,7 @@ TELEGRAM_DAEMON_PROXY_PASSWORD=getenv("TELEGRAM_DAEMON_PROXY_PASSWORD")
 TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT=int(getenv("TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT", "3600"))  # 下载超时，默认1小时
 TELEGRAM_DAEMON_UPDATE_FREQUENCY=int(getenv("TELEGRAM_DAEMON_UPDATE_FREQUENCY", "10"))  # 进度更新频率，默认10秒
 TELEGRAM_DAEMON_START_TIMEOUT=int(getenv("TELEGRAM_DAEMON_START_TIMEOUT", "120"))  # 开始下载超时，默认2分钟
+TELEGRAM_DAEMON_NO_PROGRESS_TIMEOUT=int(getenv("TELEGRAM_DAEMON_NO_PROGRESS_TIMEOUT", "300"))  # 无进度超时，默认5分钟
 TELEGRAM_DAEMON_MAX_RETRIES=int(getenv("TELEGRAM_DAEMON_MAX_RETRIES", "3"))  # 最大重试次数，默认3次
 TELEGRAM_DAEMON_NOTIFY_FAILURE=bool(int(getenv("TELEGRAM_DAEMON_NOTIFY_FAILURE", "1")))  # 失败通知，默认开启
 
@@ -70,7 +71,6 @@ parser = argparse.ArgumentParser(
     description="Script to download files from a Telegram Channel.")
 parser.add_argument(
     "--proxy-host",
-    required=TELEGRAM_DAEMON_PROXY_HOST == None,
     type=str,
     default=TELEGRAM_DAEMON_PROXY_HOST,
     help=
@@ -78,7 +78,6 @@ parser.add_argument(
 )
 parser.add_argument(
     "--proxy-port",
-    required=TELEGRAM_DAEMON_PROXY_PORT == None,
     type=int,
     default=TELEGRAM_DAEMON_PROXY_PORT,
     help=
@@ -168,6 +167,7 @@ worker_count = args.workers
 updateFrequency = TELEGRAM_DAEMON_UPDATE_FREQUENCY
 download_timeout = TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT
 start_timeout = TELEGRAM_DAEMON_START_TIMEOUT
+no_progress_timeout = TELEGRAM_DAEMON_NO_PROGRESS_TIMEOUT
 max_retries = TELEGRAM_DAEMON_MAX_RETRIES
 notify_failure = TELEGRAM_DAEMON_NOTIFY_FAILURE
 lastUpdate = 0
@@ -270,6 +270,10 @@ try:
         download_path TEXT,
         thumbnail_path TEXT,
         retry_count INTEGER DEFAULT 0,
+        source_channel_id INTEGER,
+        source_message_id INTEGER,
+        source_message_link TEXT,
+        target_dir TEXT,
         start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         end_time TIMESTAMP,
         error_message TEXT
@@ -289,6 +293,30 @@ try:
         logger.info("Added retry_count column to downloads table")
     except sqlite3.OperationalError:
         pass  # 列已存在
+
+    try:
+        cursor.execute("ALTER TABLE downloads ADD COLUMN source_channel_id INTEGER")
+        logger.info("Added source_channel_id column to downloads table")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        cursor.execute("ALTER TABLE downloads ADD COLUMN source_message_id INTEGER")
+        logger.info("Added source_message_id column to downloads table")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        cursor.execute("ALTER TABLE downloads ADD COLUMN source_message_link TEXT")
+        logger.info("Added source_message_link column to downloads table")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        cursor.execute("ALTER TABLE downloads ADD COLUMN target_dir TEXT")
+        logger.info("Added target_dir column to downloads table")
+    except sqlite3.OperationalError:
+        pass
     
     conn.commit()
     logger.info("Downloads table created or already exists")
@@ -340,6 +368,16 @@ def cleanup_temp_files():
                 logger.info(f"Cleaned up stale temp file: {temp_file}")
     except Exception as e:
         logger.error(f"Error cleaning up temp files: {e}")
+
+
+def cleanup_temp_file_for_filename(filename):
+    try:
+        temp_file_path = build_safe_path(tempFolder, f"{filename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}")
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+            logger.info(f"Removed temp file for recovery: {temp_file_path}")
+    except Exception as e:
+        logger.error(f"Error removing temp file for {filename}: {e}")
 
 def generate_thumbnail(file_path, file_category):
     """生成缩略图（仅对图片和视频）"""
@@ -421,6 +459,28 @@ web_client = None
 web_in_progress = {}
 web_queue_items = []
 telegram_user_info = None
+telegram_channel_info = None
+web_retry_scheduler = None
+telegram_auth_state = {
+    'authorized': False,
+    'awaiting_code': False,
+    'requires_password': False,
+    'phone': '',
+    'message': 'Checking Telegram authorization...',
+}
+web_auth_send_code = None
+web_auth_verify_code = None
+web_auth_verify_password = None
+AUTH_SEND_CODE_COOLDOWN_SECONDS = 60
+auth_send_code_cooldown_until = 0.0
+auth_send_code_lock = threading.Lock()
+
+
+def get_auth_send_code_remaining():
+    remaining = auth_send_code_cooldown_until - time.time()
+    if remaining <= 0:
+        return 0
+    return math.ceil(remaining)
 
 # Function to emit status update event
 def emit_status_update():
@@ -471,18 +531,106 @@ def index():
     # Get telegram user info (stored in a global variable that's updated when client starts)
     global telegram_user_info
     telegram_user = telegram_user_info
+    auth_state = telegram_auth_state
     
     # Read template from file
     template_path = os.path.join(os.path.dirname(__file__), 'templates', 'index.html')
     with open(template_path, 'r') as f:
         template_content = f.read()
     
-    return render_template_string(template_content, version=TDD_VERSION, proxy=proxy_info, telegram_user=telegram_user)
+    return render_template_string(
+        template_content,
+        version=TDD_VERSION,
+        proxy=proxy_info,
+        telegram_user=telegram_user,
+        auth_state=auth_state
+    )
+
+
+@app.route('/api/auth/status')
+def api_auth_status():
+    try:
+        auth_state = dict(telegram_auth_state)
+        auth_state['resend_available_in'] = get_auth_send_code_remaining()
+        return jsonify(auth_state)
+    except Exception as e:
+        logger.error(f'API auth status error: {e}', exc_info=True)
+        return jsonify({'error': 'Internal server error'}), 500
+
+
+@app.route('/api/auth/send-code', methods=['POST'])
+def api_auth_send_code():
+    try:
+        global web_auth_send_code, auth_send_code_cooldown_until
+        if web_auth_send_code is None:
+            return jsonify({'error': 'Telegram auth service is not ready yet'}), 503
+
+        payload = request.get_json(silent=True) or {}
+        phone = (payload.get('phone') or '').strip()
+        if not phone:
+            return jsonify({'error': 'Phone number is required'}), 400
+
+        with auth_send_code_lock:
+            remaining = get_auth_send_code_remaining()
+            if remaining > 0:
+                return jsonify({
+                    'error': f'Please wait {remaining} seconds before requesting a new code.',
+                    'resend_available_in': remaining,
+                }), 429
+
+            result = web_auth_send_code(phone)
+            auth_send_code_cooldown_until = time.time() + AUTH_SEND_CODE_COOLDOWN_SECONDS
+
+        result = dict(result)
+        result['resend_available_in'] = get_auth_send_code_remaining()
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f'API auth send code error: {e}', exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/auth/verify-code', methods=['POST'])
+def api_auth_verify_code():
+    try:
+        global web_auth_verify_code
+        if web_auth_verify_code is None:
+            return jsonify({'error': 'Telegram auth service is not ready yet'}), 503
+
+        payload = request.get_json(silent=True) or {}
+        phone = (payload.get('phone') or '').strip()
+        code = (payload.get('code') or '').strip()
+        if not phone or not code:
+            return jsonify({'error': 'Phone number and code are required'}), 400
+
+        result = web_auth_verify_code(phone, code)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f'API auth verify code error: {e}', exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/auth/verify-password', methods=['POST'])
+def api_auth_verify_password():
+    try:
+        global web_auth_verify_password
+        if web_auth_verify_password is None:
+            return jsonify({'error': 'Telegram auth service is not ready yet'}), 503
+
+        payload = request.get_json(silent=True) or {}
+        password = payload.get('password') or ''
+        if not password:
+            return jsonify({'error': 'Password is required'}), 400
+
+        result = web_auth_verify_password(password)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f'API auth verify password error: {e}', exc_info=True)
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/status')
 def api_status():
     try:
-        global start_time, web_in_progress, web_queue_items
+        global start_time, web_in_progress, web_queue_items, telegram_channel_info
         
         # Calculate uptime
         uptime_seconds = int(time.time() - start_time)
@@ -508,7 +656,10 @@ def api_status():
             'queue_size': len(web_queue_items),
             'version': TDD_VERSION,
             'channel_id': channel_id,
-            'total_tasks': total_tasks
+            'channel_info': telegram_channel_info,
+            'total_tasks': total_tasks,
+            'authorized': telegram_auth_state.get('authorized', False),
+            'telegram_user': telegram_user_info,
         })
     except Exception as e:
         logger.error(f'API status error: {e}', exc_info=True)
@@ -525,13 +676,18 @@ def api_tasks():
         for filename, progress in web_in_progress.items():
             # Get file size from database for active downloads
             size = 0
+            source_message_link = ""
             try:
                 local_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
                 local_cursor = local_conn.cursor()
-                local_cursor.execute('SELECT size FROM downloads WHERE filename = ? AND status = ?', (filename, 'downloading'))
+                local_cursor.execute(
+                    'SELECT id, size, source_message_link FROM downloads WHERE filename = ? AND status = ? ORDER BY id DESC LIMIT 1',
+                    (filename, 'downloading')
+                )
                 result = local_cursor.fetchone()
                 if result:
-                    size = result[0]
+                    size = result[1]
+                    source_message_link = result[2] or ""
                 local_cursor.close()
                 local_conn.close()
             except Exception as e:
@@ -542,7 +698,8 @@ def api_tasks():
                 'status': 'downloading',
                 'progress': progress,
                 'downloadTime': time.strftime('%Y-%m-%d %H:%M:%S'),
-                'size': size
+                'size': size,
+                'source_message_link': source_message_link
             })
         
         # Add queued items
@@ -559,7 +716,8 @@ def api_tasks():
                 'status': 'queued',
                 'progress': 'Waiting for download',
                 'downloadTime': None,
-                'size': size
+                'size': size,
+                'source_message_link': build_message_link(event)
             })
         
         return jsonify({'tasks': tasks})
@@ -613,7 +771,8 @@ def api_history():
         
         # Get historical downloads with filters
         select_query = f'''
-        SELECT id, filename, file_type, status, size, progress, download_path, thumbnail_path, start_time, end_time, error_message
+        SELECT id, filename, file_type, status, size, progress, download_path, thumbnail_path, retry_count,
+               source_channel_id, source_message_id, source_message_link, target_dir, start_time, end_time, error_message
         FROM downloads
         {where_clause}
         ORDER BY start_time DESC
@@ -637,9 +796,14 @@ def api_history():
                 'progress': row[5],
                 'download_path': row[6],
                 'thumbnail_path': row[7],
-                'start_time': row[8],
-                'end_time': row[9],
-                'error_message': row[10]
+                'retry_count': row[8],
+                'source_channel_id': row[9],
+                'source_message_id': row[10],
+                'source_message_link': row[11],
+                'target_dir': row[12],
+                'start_time': row[13],
+                'end_time': row[14],
+                'error_message': row[15]
             })
         
         # Close the local connection
@@ -663,6 +827,7 @@ def api_download():
         # Get parameters
         task_id = request.args.get('task_id', type=str)
         filename = request.args.get('filename', type=str)
+        delete_file = request.args.get('delete_file', default='1', type=str) != '0'
         
         if not task_id or not filename:
             return jsonify({'error': 'Missing task_id or filename parameter'}), 400
@@ -682,8 +847,13 @@ def api_download():
             local_cursor.close()
             local_conn.close()
             return jsonify({'error': 'File not found in database'}), 404
+
+        if not result[0]:
+            local_cursor.close()
+            local_conn.close()
+            return jsonify({'error': 'File is not available for download yet'}), 409
         
-        file_path = result[0]
+        file_path = ensure_existing_path_within(downloadFolder, result[0])
         
         # Close the local connection
         local_cursor.close()
@@ -699,15 +869,122 @@ def api_download():
         logger.error(f'API download error: {e}', exc_info=True)
         return jsonify({'error': 'Internal server error'}), 500
 
+@app.route('/api/retry', methods=['POST'])
+def api_retry():
+    try:
+        global web_retry_scheduler
+
+        task_id = request.args.get('task_id', type=str)
+        if not task_id:
+            return jsonify({'error': 'Missing task_id parameter'}), 400
+
+        actual_task_id = task_id.split('-')[-1]
+
+        local_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        local_cursor = local_conn.cursor()
+        retry_dir = request.args.get('retry_dir', type=str)
+        resolved_retry_dir = resolve_retry_directory(retry_dir) if retry_dir else None
+
+        local_cursor.execute(
+            'SELECT filename, source_channel_id, source_message_id, source_message_link, download_path, target_dir FROM downloads WHERE id = ?',
+            (actual_task_id,)
+        )
+        result = local_cursor.fetchone()
+        local_cursor.close()
+        local_conn.close()
+
+        if not result:
+            return jsonify({'error': 'File not found in database'}), 404
+
+        filename, source_channel_id, source_message_id, source_message_link, download_path, target_dir = result
+        if not source_channel_id or not source_message_id:
+            return jsonify({'error': 'This task does not have source message metadata for retry'}), 400
+
+        if web_retry_scheduler is None:
+            return jsonify({'error': 'Retry service is not ready yet'}), 503
+
+        retry_result = web_retry_scheduler(int(source_channel_id), int(source_message_id), resolved_retry_dir)
+        return jsonify({
+            'success': True,
+            'message': f'Retry queued for {filename}',
+            'filename': retry_result.get('filename', filename),
+            'source_message_link': source_message_link,
+            'retry_dir': resolved_retry_dir or target_dir or (os.path.dirname(download_path) if download_path else '')
+        })
+    except Exception as e:
+        logger.error(f'API retry error: {e}', exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/delete', methods=['DELETE'])
 def api_delete():
     try:
         # Get parameters
         task_id = request.args.get('task_id', type=str)
         filename = request.args.get('filename', type=str)
+        delete_file = request.args.get('delete_file', default='1', type=str) != '0'
         
         if not task_id or not filename:
             return jsonify({'error': 'Missing task_id or filename parameter'}), 400
+        
+        # Extract actual task id from task_id string (e.g., "history-123" -> "123")
+        actual_task_id = task_id.split('-')[-1]
+        
+        # Create a new connection for this request to ensure thread safety
+        local_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        local_cursor = local_conn.cursor()
+        
+        # Get file paths from database
+        local_cursor.execute('SELECT download_path, thumbnail_path, filename FROM downloads WHERE id = ?', (actual_task_id,))
+        result = local_cursor.fetchone()
+        
+        if not result:
+            local_cursor.close()
+            local_conn.close()
+            return jsonify({'error': 'File not found in database'}), 404
+
+        download_path, thumbnail_path, stored_filename = result
+
+        if delete_file and download_path:
+            file_path = ensure_existing_path_within(downloadFolder, download_path)
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                logger.info(f'Deleted file: {file_path}')
+
+        if delete_file and thumbnail_path:
+            safe_thumbnail_path = ensure_existing_path_within(downloadFolder, thumbnail_path)
+            if os.path.exists(safe_thumbnail_path):
+                os.remove(safe_thumbnail_path)
+                logger.info(f'Deleted thumbnail: {safe_thumbnail_path}')
+
+        if delete_file:
+            cleanup_temp_file_for_filename(stored_filename or filename)
+        
+        # Delete record from database
+        local_cursor.execute('DELETE FROM downloads WHERE id = ?', (actual_task_id,))
+        local_conn.commit()
+        logger.info(f'Deleted download record: {actual_task_id}')
+        
+        # Close the local connection
+        local_cursor.close()
+        local_conn.close()
+        
+        return jsonify({
+            'success': True,
+            'message': 'File and record deleted successfully' if delete_file else 'Record deleted successfully'
+        })
+    except Exception as e:
+        logger.error(f'API delete error: {e}', exc_info=True)
+        return jsonify({'error': 'Internal server error'}), 500
+
+@app.route('/api/rename', methods=['POST'])
+def api_rename():
+    try:
+        # Get parameters
+        task_id = request.args.get('task_id', type=str)
+        new_filename = request.args.get('new_filename', type=str)
+        
+        if not task_id or not new_filename:
+            return jsonify({'error': 'Missing task_id or new_filename parameter'}), 400
         
         # Extract actual task id from task_id string (e.g., "history-123" -> "123")
         actual_task_id = task_id.split('-')[-1]
@@ -725,56 +1002,7 @@ def api_delete():
             local_conn.close()
             return jsonify({'error': 'File not found in database'}), 404
         
-        file_path = result[0]
-        
-        # Delete file from disk if it exists
-        if os.path.exists(file_path):
-            os.remove(file_path)
-            logger.info(f'Deleted file: {file_path}')
-        
-        # Delete record from database
-        local_cursor.execute('DELETE FROM downloads WHERE id = ?', (actual_task_id,))
-        local_conn.commit()
-        logger.info(f'Deleted download record: {actual_task_id}')
-        
-        # Close the local connection
-        local_cursor.close()
-        local_conn.close()
-        
-        return jsonify({'success': True, 'message': 'File deleted successfully'})
-    except Exception as e:
-        logger.error(f'API delete error: {e}', exc_info=True)
-        return jsonify({'error': 'Internal server error'}), 500
-
-@app.route('/api/rename', methods=['POST'])
-def api_rename():
-    try:
-        # Get parameters
-        task_id = request.args.get('task_id', type=str)
-        filename = request.args.get('filename', type=str)
-        new_filename = request.args.get('new_filename', type=str)
-        
-        if not task_id or not filename or not new_filename:
-            return jsonify({'error': 'Missing task_id, filename, or new_filename parameter'}), 400
-        
-        # Extract actual task id from task_id string (e.g., "history-123" -> "123")
-        actual_task_id = task_id.split('-')[-1]
-        
-        # Create a new connection for this request to ensure thread safety
-        local_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        local_cursor = local_conn.cursor()
-        
-        # Get file path from database
-        local_cursor.execute('SELECT download_path, file_type FROM downloads WHERE id = ?', (actual_task_id,))
-        result = local_cursor.fetchone()
-        
-        if not result:
-            local_cursor.close()
-            local_conn.close()
-            return jsonify({'error': 'File not found in database'}), 404
-        
-        old_file_path = result[0]
-        file_type = result[1]
+        old_file_path = ensure_existing_path_within(downloadFolder, result[0])
         
         # Check if file exists
         if not os.path.exists(old_file_path):
@@ -784,19 +1012,41 @@ def api_rename():
         
         # Get directory path and extension
         dir_path = os.path.dirname(old_file_path)
+        safe_new_filename = sanitize_filename(new_filename)
         old_extension = os.path.splitext(old_file_path)[1]
-        
+        new_extension = os.path.splitext(safe_new_filename)[1]
+        if old_extension and not new_extension:
+            safe_new_filename = f"{safe_new_filename}{old_extension}"
+
         # Create new file path with same extension
-        new_file_path = os.path.join(dir_path, new_filename)
+        new_file_path = build_safe_path(dir_path, safe_new_filename)
+        if os.path.exists(new_file_path):
+            local_cursor.close()
+            local_conn.close()
+            return jsonify({'error': 'Target filename already exists'}), 409
+
+        old_thumbnail_path = None
+        thumbnail_dir = os.path.join(dir_path, '.thumbnails')
+        candidate_thumbnail = build_safe_path(thumbnail_dir, os.path.basename(old_file_path) + '.jpg')
+        if os.path.exists(candidate_thumbnail):
+            old_thumbnail_path = candidate_thumbnail
+        new_thumbnail_path = build_safe_path(thumbnail_dir, os.path.basename(new_file_path) + '.jpg') if old_thumbnail_path else None
         
         # Rename file on disk
         os.rename(old_file_path, new_file_path)
         logger.info(f'Renamed file: {old_file_path} -> {new_file_path}')
+
+        if old_thumbnail_path and new_thumbnail_path:
+            os.rename(old_thumbnail_path, new_thumbnail_path)
+            logger.info(f'Renamed thumbnail: {old_thumbnail_path} -> {new_thumbnail_path}')
         
-        # Update filename in database
-        local_cursor.execute('UPDATE downloads SET filename = ? WHERE id = ?', (new_filename, actual_task_id))
+        # Update paths in database
+        local_cursor.execute(
+            'UPDATE downloads SET filename = ?, download_path = ?, thumbnail_path = ? WHERE id = ?',
+            (safe_new_filename, new_file_path, new_thumbnail_path, actual_task_id)
+        )
         local_conn.commit()
-        logger.info(f'Updated download record filename: {actual_task_id} -> {new_filename}')
+        logger.info(f'Updated download record filename: {actual_task_id} -> {safe_new_filename}')
         
         # Close the local connection
         local_cursor.close()
@@ -827,7 +1077,7 @@ def api_thumbnail():
         if not result or not result[0]:
             return jsonify({'error': 'Thumbnail not found'}), 404
         
-        thumbnail_path = result[0]
+        thumbnail_path = ensure_existing_path_within(downloadFolder, result[0])
         if not os.path.exists(thumbnail_path):
             return jsonify({'error': 'Thumbnail file not found'}), 404
         
@@ -859,50 +1109,109 @@ async def sendHelloMessage(client: TelegramClient, peerChannel: PeerChannel) -> 
 
 async def log_reply(message: events.NewMessage.Event, reply: str) -> None:
     print(reply)
-    await message.edit(reply)
+    if message is not None:
+        await message.edit(reply)
 
 def getRandomId(length: int) -> str:
     chars = string.ascii_lowercase + string.digits
     return ''.join(random.choice(chars) for _ in range(length))
- 
 
-def getFilename(event: events.NewMessage.Event) -> str:
+
+def sanitize_filename(filename: str) -> str:
+    filename = (filename or "").replace("\\", "_").replace("/", "_")
+    safe_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-()[]{}!@#$%^&*+=,;:'\" "
+    filename = "".join(c for c in filename if c in safe_chars).strip()
+
+    if not filename or filename in {".", ".."}:
+        return f"file_{getRandomId(8)}"
+
+    name, ext = os.path.splitext(filename)
+    if len(filename) > 255:
+        filename = f"{name[:255-len(ext)]}{ext}"
+
+    return filename
+
+
+def build_safe_path(base_dir: str, *parts: str) -> str:
+    base_dir_abs = os.path.abspath(base_dir)
+    candidate = os.path.abspath(os.path.join(base_dir_abs, *parts))
+    if os.path.commonpath([base_dir_abs, candidate]) != base_dir_abs:
+        raise ValueError(f"Refusing to access path outside base directory: {candidate}")
+    return candidate
+
+
+def ensure_existing_path_within(base_dir: str, target_path: str) -> str:
+    base_dir_abs = os.path.abspath(base_dir)
+    candidate = os.path.abspath(target_path)
+    if os.path.commonpath([base_dir_abs, candidate]) != base_dir_abs:
+        raise ValueError(f"Refusing to access existing path outside base directory: {candidate}")
+    return candidate
+
+
+def resolve_retry_directory(target_dir: str | None) -> str | None:
+    if not target_dir:
+        return None
+
+    candidate = os.path.abspath(target_dir)
+    download_root = os.path.abspath(downloadFolder)
+    if os.path.commonpath([download_root, candidate]) != download_root:
+        raise ValueError(f"Retry path must stay inside download root: {download_root}")
+    return candidate
+
+
+def get_message_object(message_or_event):
+    if hasattr(message_or_event, 'original_update') and hasattr(message_or_event, 'message'):
+        return message_or_event.message
+    return message_or_event
+
+
+def get_source_channel_id(message_or_event) -> int:
+    message_obj = get_message_object(message_or_event)
+    peer = getattr(message_obj, 'peer_id', None)
+    if peer and hasattr(peer, 'channel_id'):
+        return peer.channel_id
+    return channel_id
+
+
+def build_message_link(message_or_event) -> str:
+    message_obj = get_message_object(message_or_event)
+    message_id = getattr(message_obj, 'id', None)
+    if not message_id:
+        return ""
+
+    chat = getattr(message_obj, 'chat', None)
+    username = getattr(chat, 'username', None)
+    if username:
+        return f"https://t.me/{username}/{message_id}"
+
+    source_channel_id = get_source_channel_id(message_obj)
+    return f"https://t.me/c/{source_channel_id}/{message_id}"
+
+
+def getFilename(message_or_event) -> str:
+    message_obj = get_message_object(message_or_event)
     mediaFileName = "unknown"
 
-    if hasattr(event.media, 'photo'):
-        mediaFileName = f"{event.media.photo.id}.jpeg"
-    elif hasattr(event.media, 'document'):
+    if getattr(message_obj, 'photo', None):
+        mediaFileName = f"{message_obj.photo.id}.jpeg"
+    elif getattr(message_obj, 'document', None):
         # 优先使用文件名属性
-        for attribute in event.media.document.attributes:
+        for attribute in message_obj.document.attributes:
             if isinstance(attribute, DocumentAttributeFilename): 
                 mediaFileName = attribute.file_name
                 break      
         # 如果没有文件名属性，尝试使用其他方式
         if mediaFileName == "unknown":
-            if event.original_update.message.message != '': 
-                mediaFileName = event.original_update.message.message
+            if getattr(message_obj, 'message', '') != '':
+                mediaFileName = message_obj.message
             else:    
-                mediaFileName = str(event.media.document.id)
+                mediaFileName = str(message_obj.document.id)
             # 添加适当的扩展名
-            extension = guess_extension(event.media.document.mime_type)
+            extension = guess_extension(message_obj.document.mime_type)
             if extension:
                 mediaFileName += extension
     
-    # 确保文件名安全，只允许字母、数字和常见的安全字符
-    # 移除所有不安全的字符
-    safe_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-()[]{}!@#$%^&*+=,;:'\" \\/"
-    mediaFileName = "".join(c for c in mediaFileName if c in safe_chars)
-    
-    # 确保文件名不为空
-    if not mediaFileName or mediaFileName == ".":
-        mediaFileName = f"file_{getRandomId(8)}"
-    
-    # 确保文件名不超过255个字符（常见的文件系统限制）
-    if len(mediaFileName) > 255:
-        name, ext = os.path.splitext(mediaFileName)
-        mediaFileName = f"{name[:255-len(ext)]}{ext}"
-      
-    return mediaFileName
+    return sanitize_filename(mediaFileName)
 
 
 # 移除全局变量，将在 start 函数内部管理状态
@@ -931,13 +1240,11 @@ try:
     else:
         logger.info("No proxy configured")
     
-    # Create and start client without with statement
-    client = TelegramClient(getSession(), api_id, api_hash, proxy=proxy)
-    client.start()
-    
-    # Save session
-    saveSession(client.session)
-    logger.info("Telegram client session saved")
+    # Create client without interactive auth prompts
+    main_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(main_loop)
+    client = TelegramClient(getSession(), api_id, api_hash, proxy=proxy, loop=main_loop)
+    main_loop.run_until_complete(client.connect())
     
     # Update web_client reference
     web_client = client
@@ -978,24 +1285,119 @@ try:
         queue_items = []
         
         peerChannel = PeerChannel(channel_id)
+        auth_ready_event = asyncio.Event()
+        auth_context = {
+            'phone': '',
+            'phone_code_hash': '',
+        }
         
         # Link web variables to local variables
-        global web_in_progress, web_queue_items, telegram_user_info
+        global web_in_progress, web_queue_items, telegram_user_info, telegram_channel_info
         web_in_progress = in_progress
         web_queue_items = queue_items
-        
-        # Get telegram user info in the main loop
-        try:
-            me = await client.get_me()
-            telegram_user_info = {
-                'username': me.username,
-                'first_name': me.first_name,
-                'last_name': me.last_name or ''
-            }
-            logger.info(f"Telegram user: {me.username} ({me.first_name} {me.last_name})")
-        except Exception as e:
-            logger.error(f"Failed to get telegram user info: {e}")
-            telegram_user_info = None
+
+        async def refresh_channel_info():
+            global telegram_channel_info
+            try:
+                entity = await client.get_entity(peerChannel)
+                telegram_channel_info = {
+                    'title': getattr(entity, 'title', '') or 'Unknown Channel',
+                    'id': channel_id,
+                    'username': getattr(entity, 'username', None),
+                }
+            except Exception as e:
+                logger.warning(f'Failed to load channel info: {e}')
+                telegram_channel_info = {
+                    'title': 'Unknown Channel',
+                    'id': channel_id,
+                    'username': None,
+                }
+
+        async def refresh_auth_state(message=None):
+            global telegram_user_info, telegram_auth_state
+            authorized = await client.is_user_authorized()
+            if authorized:
+                me = await client.get_me()
+                telegram_user_info = {
+                    'username': me.username,
+                    'first_name': me.first_name,
+                    'last_name': me.last_name or ''
+                }
+                saveSession(client.session)
+                telegram_auth_state = {
+                    'authorized': True,
+                    'awaiting_code': False,
+                    'requires_password': False,
+                    'phone': auth_context.get('phone', ''),
+                    'resend_available_in': get_auth_send_code_remaining(),
+                    'message': message or f"Signed in as {me.first_name}",
+                }
+                auth_ready_event.set()
+                await refresh_channel_info()
+                logger.info(f"Telegram user: {me.username} ({me.first_name} {me.last_name})")
+            else:
+                telegram_user_info = None
+                telegram_auth_state = {
+                    'authorized': False,
+                    'awaiting_code': bool(auth_context.get('phone_code_hash')),
+                    'requires_password': False,
+                    'phone': auth_context.get('phone', ''),
+                    'resend_available_in': get_auth_send_code_remaining(),
+                    'message': message or 'Please sign in from the web page.',
+                }
+
+        async def send_login_code(phone):
+            auth_context['phone'] = phone.strip()
+            auth_context['phone_code_hash'] = ''
+            result = await client.send_code_request(auth_context['phone'])
+            auth_context['phone_code_hash'] = result.phone_code_hash
+            await refresh_auth_state('Verification code sent. Check Telegram or SMS.')
+            return telegram_auth_state
+
+        async def verify_login_code(phone, code):
+            auth_context['phone'] = phone.strip()
+            if not auth_context.get('phone_code_hash'):
+                raise ValueError('No verification request is active. Send a code first.')
+
+            try:
+                await client.sign_in(
+                    phone=auth_context['phone'],
+                    code=code.strip(),
+                    phone_code_hash=auth_context['phone_code_hash']
+                )
+                auth_context['phone_code_hash'] = ''
+                await refresh_auth_state('Login successful.')
+                return telegram_auth_state
+            except SessionPasswordNeededError:
+                telegram_auth_state.update({
+                    'authorized': False,
+                    'awaiting_code': False,
+                    'requires_password': True,
+                    'phone': auth_context.get('phone', ''),
+                    'resend_available_in': get_auth_send_code_remaining(),
+                    'message': 'Two-step verification is enabled. Enter your password.',
+                })
+                return telegram_auth_state
+
+        async def verify_login_password(password):
+            await client.sign_in(password=password)
+            auth_context['phone_code_hash'] = ''
+            await refresh_auth_state('Login successful.')
+            return telegram_auth_state
+
+        def schedule_auth_call(coro):
+            future = asyncio.run_coroutine_threadsafe(coro, main_loop)
+            return future.result(timeout=120)
+
+        global web_auth_send_code, web_auth_verify_code, web_auth_verify_password
+        web_auth_send_code = lambda phone: schedule_auth_call(send_login_code(phone))
+        web_auth_verify_code = lambda phone, code: schedule_auth_call(verify_login_code(phone, code))
+        web_auth_verify_password = lambda password: schedule_auth_call(verify_login_password(password))
+
+        await refresh_auth_state()
+        if not telegram_auth_state.get('authorized'):
+            logger.info("Telegram client is waiting for web login")
+            await auth_ready_event.wait()
         
         # 内部的 set_progress 函数，使用闭包访问状态
         async def set_progress(filename, message, received, total):
@@ -1020,6 +1422,170 @@ try:
                 if (currentTime - lastUpdate) > updateFrequency:
                     await log_reply(message, progress_message)
                     lastUpdate = currentTime
+
+        async def persist_queued_download(message_obj, target_dir_override=None, existing_download_id=None, recovery_note=None):
+            filename = getFilename(message_obj)
+            file_category = getFileTypeCategory(filename)
+            size = 0 if getattr(message_obj, 'photo', None) else (message_obj.document.size if getattr(message_obj, 'document', None) else 0)
+            source_channel = get_source_channel_id(message_obj)
+            source_message_id = getattr(message_obj, 'id', None)
+            source_message_link = build_message_link(message_obj)
+            resolved_target_dir = resolve_retry_directory(target_dir_override) if target_dir_override else None
+
+            async with db_lock:
+                if existing_download_id is None:
+                    cursor.execute(
+                        '''
+                        INSERT INTO downloads (
+                            filename, file_type, status, size, progress, source_channel_id,
+                            source_message_id, source_message_link, target_dir, error_message
+                        )
+                        VALUES (?, ?, 'queued', ?, 0.0, ?, ?, ?, ?, ?)
+                        ''',
+                        (
+                            filename, file_category, size, source_channel, source_message_id,
+                            source_message_link, resolved_target_dir, recovery_note
+                        )
+                    )
+                    conn.commit()
+                    return cursor.lastrowid
+
+                cursor.execute(
+                    '''
+                    UPDATE downloads
+                    SET filename = ?, file_type = ?, status = 'queued', size = ?, progress = 0.0,
+                        source_channel_id = ?, source_message_id = ?, source_message_link = ?,
+                        target_dir = ?, download_path = NULL, end_time = NULL, error_message = COALESCE(?, error_message)
+                    WHERE id = ?
+                    ''',
+                    (
+                        filename, file_category, size, source_channel, source_message_id,
+                        source_message_link, resolved_target_dir, recovery_note, existing_download_id
+                    )
+                )
+                conn.commit()
+                return existing_download_id
+
+        async def enqueue_download_message(message_obj, notice_template="{0} added to queue", target_dir_override=None, existing_download_id=None, silent=False, recovery_note=None):
+            nonlocal queue_items
+            global web_queue_items
+
+            is_photo = getattr(message_obj, 'photo', None) is not None
+            is_document = getattr(message_obj, 'document', None) is not None
+            if not (is_photo or is_document):
+                raise ValueError("That message does not contain a downloadable file")
+
+            filename = getFilename(message_obj)
+            temp_path = build_safe_path(tempFolder, f"{filename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}")
+            root_path = build_safe_path(downloadFolder, filename)
+            if (path.exists(temp_path) or path.exists(root_path)) and duplicates == "ignore":
+                status_message = None if silent else await message_obj.reply("{0} already exists. Ignoring it.".format(filename))
+                logger.info(f"Ignoring duplicate file: {filename}")
+                return {'queued': False, 'filename': filename, 'message': status_message}
+
+            download_id = await persist_queued_download(
+                message_obj,
+                target_dir_override=target_dir_override,
+                existing_download_id=existing_download_id,
+                recovery_note=recovery_note
+            )
+            status_message = None if silent else await message_obj.reply(notice_template.format(filename))
+            queue_item = [message_obj, status_message, target_dir_override, download_id]
+
+            is_video = False
+            if is_document:
+                for attribute in message_obj.document.attributes:
+                    if isinstance(attribute, DocumentAttributeVideo):
+                        is_video = True
+                        break
+
+            async with queue_lock:
+                if is_photo:
+                    await photo_queue.put(queue_item)
+                    photo_queue_items.append(queue_item)
+                elif is_video:
+                    await video_queue.put(queue_item)
+                    video_queue_items.append(queue_item)
+                else:
+                    await other_queue.put(queue_item)
+                    other_queue_items.append(queue_item)
+                queue_items = photo_queue_items + video_queue_items + other_queue_items
+                web_queue_items = queue_items
+
+            logger.info(f"Added file to queue: {filename}, type: {'photo' if is_photo else 'video' if is_video else 'other'}")
+            socketio.emit('new_task', {
+                'filename': filename,
+                'status': 'queued',
+                'downloadTime': time.strftime('%Y-%m-%d %H:%M:%S'),
+                'source_message_link': build_message_link(message_obj)
+            })
+            emit_status_update()
+            return {'queued': True, 'filename': filename, 'message': status_message, 'download_id': download_id}
+
+        async def retry_download_message(source_channel_id, source_message_id, target_dir_override=None):
+            message_obj = await client.get_messages(PeerChannel(source_channel_id), ids=source_message_id)
+            if not message_obj:
+                raise ValueError("Unable to locate the original Telegram message")
+            return await enqueue_download_message(message_obj, "{0} re-added to queue", target_dir_override)
+
+        async def restore_pending_downloads():
+            async with db_lock:
+                cursor.execute(
+                    '''
+                    SELECT id, source_channel_id, source_message_id, target_dir, status, filename
+                    FROM downloads
+                    WHERE status IN ('queued', 'interrupted', 'downloading')
+                      AND source_channel_id IS NOT NULL
+                      AND source_message_id IS NOT NULL
+                    ORDER BY id ASC
+                    '''
+                )
+                pending_rows = cursor.fetchall()
+
+            restored = 0
+            for download_id, source_channel_id, source_message_id, target_dir, previous_status, previous_filename in pending_rows:
+                try:
+                    cleanup_temp_file_for_filename(previous_filename)
+                    message_obj = await client.get_messages(PeerChannel(source_channel_id), ids=source_message_id)
+                    if not message_obj:
+                        async with db_lock:
+                            cursor.execute(
+                                '''
+                                UPDATE downloads
+                                SET status = 'failed', error_message = ?, end_time = CURRENT_TIMESTAMP
+                                WHERE id = ?
+                                ''',
+                                ("Original Telegram message no longer exists", download_id)
+                            )
+                            conn.commit()
+                        continue
+
+                    recovery_note = f"Recovered after restart from {previous_status}"
+                    await enqueue_download_message(
+                        message_obj,
+                        "{0} restored to queue after restart",
+                        target_dir_override=target_dir,
+                        existing_download_id=download_id,
+                        silent=True,
+                        recovery_note=recovery_note
+                    )
+                    restored += 1
+                except Exception as restore_error:
+                    logger.error(f"Failed to restore pending download {download_id}: {restore_error}", exc_info=True)
+
+            if restored > 0:
+                logger.info(f"Restored {restored} pending downloads after restart")
+
+        def schedule_retry(source_channel_id, source_message_id, target_dir_override=None):
+            future = asyncio.run_coroutine_threadsafe(
+                retry_download_message(source_channel_id, source_message_id, target_dir_override),
+                main_loop
+            )
+            return future.result(timeout=60)
+
+        global web_retry_scheduler
+        web_retry_scheduler = schedule_retry
+        await restore_pending_downloads()
         
         @client.on(events.NewMessage())
         async def handler(event):
@@ -1035,46 +1601,7 @@ try:
                 is_document = event.document is not None
                 
                 if is_photo or is_document:
-                    filename=getFilename(event)
-                    if ( path.exists("{0}/{1}.{2}".format(tempFolder,filename,TELEGRAM_DAEMON_TEMP_SUFFIX)) or path.exists("{0}/{1}".format(downloadFolder,filename)) ) and duplicates == "ignore":
-                        message=await event.reply("{0} already exists. Ignoring it.".format(filename))
-                        logger.info(f"Ignoring duplicate file: {filename}")
-                    else:
-                        message=await event.reply("{0} added to queue".format(filename))
-                        queue_item = [event, message]
-                        
-                        # 根据文件类型决定放入哪个队列
-                        is_video = False
-                        if is_document:
-                            for attribute in event.document.attributes:
-                                if isinstance(attribute, DocumentAttributeVideo):
-                                    is_video = True
-                                    break
-                        
-                        async with queue_lock:
-                            if is_photo:
-                                await photo_queue.put(queue_item)
-                                photo_queue_items.append(queue_item)
-                            elif is_video:
-                                await video_queue.put(queue_item)
-                                video_queue_items.append(queue_item)
-                            else:
-                                await other_queue.put(queue_item)
-                                other_queue_items.append(queue_item)
-                            # 同步更新 web_queue_items
-                            queue_items = photo_queue_items + video_queue_items + other_queue_items
-                            web_queue_items = queue_items
-                        
-                        logger.info(f"Added file to queue: {filename}, type: {'photo' if is_photo else 'video' if is_video else 'other'}")
-                        
-                        # Send WebSocket notifications
-                        socketio.emit('new_task', {
-                            'filename': filename,
-                            'status': 'queued',
-                            'downloadTime': time.strftime('%Y-%m-%d %H:%M:%S')
-                        })
-                        # Update status
-                        emit_status_update()
+                    await enqueue_download_message(event.message)
                 elif event.media:
                     # 有 media 但不是 photo 或 document
                     message=await event.reply("That is not downloadable. Try to send it as a file.")
@@ -1162,7 +1689,9 @@ try:
             nonlocal queue_items
             while True:
                 download_id = None
+                filename = "unknown"
                 try:
+                    global web_queue_items
                     element = await worker_queue.get()
                     # 从队列跟踪列表中移除元素
                     async with queue_lock:
@@ -1172,12 +1701,14 @@ try:
                         queue_items = photo_queue_items + video_queue_items + other_queue_items
                         # 同步更新 web_queue_items
                         web_queue_items = queue_items
-                    event=element[0]
+                    message_obj=element[0]
                     message=element[1]
+                    target_dir_override = element[2] if len(element) > 2 else None
+                    download_id = element[3] if len(element) > 3 else None
                     # Update status after removing from queue
                     emit_status_update()
 
-                    filename=getFilename(event)
+                    filename=getFilename(message_obj)
                     fileName, fileExtension = os.path.splitext(filename)
                     tempfilename=fileName+"-"+getRandomId(8)+fileExtension
 
@@ -1187,37 +1718,77 @@ try:
                     
                     # Create category directory with date subfolder
                     current_date = time.strftime('%Y-%m-%d')
-                    category_folder = os.path.join(downloadFolder, file_category, current_date)
+                    category_folder = target_dir_override or os.path.join(downloadFolder, file_category, current_date)
                     if not os.path.exists(category_folder):
                         os.makedirs(category_folder)
                         logger.info(f"Created category folder: {category_folder}")
 
                     # Check for duplicates in the category folder
-                    if path.exists("{0}/{1}.{2}".format(tempFolder,tempfilename,TELEGRAM_DAEMON_TEMP_SUFFIX)) or path.exists("{0}/{1}".format(category_folder,filename)):
+                    temp_duplicate_path = build_safe_path(tempFolder, f"{tempfilename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}")
+                    final_duplicate_path = build_safe_path(category_folder, filename)
+                    if path.exists(temp_duplicate_path) or path.exists(final_duplicate_path):
                         if duplicates == "rename":
                            filename=tempfilename
                            logger.info(f"Renamed file to avoid duplicate: {filename}")
                         elif duplicates == "ignore":
                            logger.info(f"Ignoring duplicate file: {filename}")
-                           queue.task_done()
+                           if download_id:
+                               async with db_lock:
+                                   cursor.execute(
+                                       '''
+                                       UPDATE downloads
+                                       SET status = 'ignored', error_message = ?, end_time = CURRENT_TIMESTAMP
+                                       WHERE id = ?
+                                       ''',
+                                       ("Duplicate file ignored", download_id)
+                                   )
+                                   conn.commit()
+                           worker_queue.task_done()
                            continue
 
-                    if hasattr(event.media, 'photo'):
+                    if getattr(message_obj, 'photo', None):
                        size = 0
                        logger.info(f"Processing photo: {filename}")
                     else: 
-                       size=event.media.document.size
+                       size=message_obj.document.size
                        logger.info(f"Processing document: {filename}, Size: {size} bytes")
 
-                    # Insert download record into database
-                    download_path = os.path.join(category_folder, filename)
+                    # Update queued record into downloading state
+                    download_path = build_safe_path(category_folder, filename)
+                    source_channel = get_source_channel_id(message_obj)
+                    source_message_id = getattr(message_obj, 'id', None)
+                    source_message_link = build_message_link(message_obj)
                     async with db_lock:
-                        cursor.execute('''
-                        INSERT INTO downloads (filename, file_type, status, size, progress, download_path)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        ''', (filename, file_category, 'downloading', size, 0.0, download_path))
+                        if download_id is None:
+                            cursor.execute(
+                                '''
+                                INSERT INTO downloads (
+                                    filename, file_type, status, size, progress, download_path,
+                                    source_channel_id, source_message_id, source_message_link, target_dir
+                                )
+                                VALUES (?, ?, 'downloading', ?, 0.0, ?, ?, ?, ?, ?)
+                                ''',
+                                (
+                                    filename, file_category, size, download_path, source_channel,
+                                    source_message_id, source_message_link, target_dir_override
+                                )
+                            )
+                            download_id = cursor.lastrowid
+                        else:
+                            cursor.execute(
+                                '''
+                                UPDATE downloads
+                                SET filename = ?, file_type = ?, status = 'downloading', size = ?, progress = 0.0,
+                                    download_path = ?, source_channel_id = ?, source_message_id = ?,
+                                    source_message_link = ?, target_dir = ?, end_time = NULL
+                                WHERE id = ?
+                                ''',
+                                (
+                                    filename, file_category, size, download_path, source_channel,
+                                    source_message_id, source_message_link, target_dir_override, download_id
+                                )
+                            )
                         conn.commit()
-                        download_id = cursor.lastrowid
                     logger.info(f"Inserted download record: ID={download_id}, Status=downloading")
 
                     await log_reply(
@@ -1225,17 +1796,15 @@ try:
                         "Downloading file {0} ({1} bytes) to {2}".format(filename, size, file_category)
                     )
 
-                    # 使用可变容器存储 download_id，让闭包能修改它
-                    download_id_container = [download_id]
-                    
                     # 进度回调函数不能是异步的，所以我们需要使用一个同步的包装器
+                    last_progress_time = [time.time()]
                     def download_callback(received, total):
                         # 由于回调是同步的，我们不能直接await异步函数
                         # 但我们可以记录进度，然后在合适的时候更新
                         nonlocal lastUpdate
-                        current_download_id = download_id_container[0]
                         percentage = math.trunc(received / total * 10000) / 100
                         progress_message = "{0} % ({1} / {2})".format(percentage, received, total)
+                        last_progress_time[0] = time.time()
                         
                         with sync_lock:
                             in_progress[filename] = progress_message
@@ -1250,11 +1819,11 @@ try:
                                 lastUpdate = currentTime
                         
                         # Update progress in database
-                        if current_download_id:
+                        if download_id:
                             with sync_db_lock:
                                 cursor.execute('''
                                 UPDATE downloads SET progress = ? WHERE id = ?
-                                ''', (percentage, current_download_id))
+                                ''', (percentage, download_id))
                                 conn.commit()
                         
                         # 每10%记录一次进度（使用整数判断避免浮点精度问题）
@@ -1284,12 +1853,13 @@ try:
                             download_started[0] = True
                         download_callback(received, total)
                     
+                    download_task = None
                     try:
                         # 创建下载任务
                         download_task = asyncio.create_task(
                             client.download_media(
-                                event.message, 
-                                "{0}/{1}.{2}".format(tempFolder, filename, TELEGRAM_DAEMON_TEMP_SUFFIX), 
+                                message_obj,
+                                build_safe_path(tempFolder, f"{filename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}"),
                                 progress_callback = check_start_callback
                             )
                         )
@@ -1311,28 +1881,33 @@ try:
                             raise asyncio.TimeoutError(f"Download did not start within {start_timeout} seconds")
                         
                         # 等待下载完成或总超时
-                        remaining_timeout = download_timeout - (time.time() - start_time) if download_started[0] else download_timeout
-                        try:
-                            await asyncio.wait_for(download_task, timeout=remaining_timeout)
-                        except asyncio.TimeoutError:
+                        while not download_task.done():
+                            elapsed = time.time() - start_time
+                            if elapsed > download_timeout:
+                                raise asyncio.TimeoutError(f"Download exceeded {download_timeout} seconds")
+                            if download_started[0] and (time.time() - last_progress_time[0]) > no_progress_timeout:
+                                raise asyncio.TimeoutError(f"No download progress for {no_progress_timeout} seconds")
+                            await asyncio.sleep(1)
+
+                        await download_task
+                        
+                        await set_progress(filename, message, 100, 100)
+                        move(build_safe_path(tempFolder, f"{filename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}"), download_path)
+                    except asyncio.TimeoutError as e:
+                        if download_task is not None and not download_task.done():
                             download_task.cancel()
                             try:
                                 await download_task
                             except asyncio.CancelledError:
                                 pass
-                            raise
-                        
-                        await set_progress(filename, message, 100, 100)
-                        move("{0}/{1}.{2}".format(tempFolder, filename, TELEGRAM_DAEMON_TEMP_SUFFIX), download_path)
-                    except asyncio.TimeoutError as e:
                         # 清理临时文件
-                        temp_file_path = "{0}/{1}.{2}".format(tempFolder, filename, TELEGRAM_DAEMON_TEMP_SUFFIX)
+                        temp_file_path = build_safe_path(tempFolder, f"{filename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}")
                         if os.path.exists(temp_file_path):
                             os.remove(temp_file_path)
                         raise
                     except asyncio.CancelledError:
                         # 清理临时文件
-                        temp_file_path = "{0}/{1}.{2}".format(tempFolder, filename, TELEGRAM_DAEMON_TEMP_SUFFIX)
+                        temp_file_path = build_safe_path(tempFolder, f"{filename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}")
                         if os.path.exists(temp_file_path):
                             os.remove(temp_file_path)
                         raise asyncio.TimeoutError("Download was cancelled")
@@ -1386,8 +1961,8 @@ try:
                         # 重新加入队列
                         await asyncio.sleep(5)  # 等待5秒后重试
                         async with queue_lock:
-                            await worker_queue.put([event, message])
-                            queue_items_list.append([event, message])
+                            await worker_queue.put([message_obj, message, target_dir_override, download_id])
+                            queue_items_list.append([message_obj, message, target_dir_override, download_id])
                             web_queue_items = photo_queue_items + video_queue_items + other_queue_items
                         
                         await log_reply(message, f"⚠️ Retry {new_retry}/{max_retries}: {filename}")
@@ -1406,7 +1981,7 @@ try:
                             failure_msg = f"❌ 下载失败（已重试{max_retries}次）\n原因: {error_msg[:200]}"
                             try:
                                 # 回复原始文件消息，让用户直观看到失败的文件
-                                await event.reply(failure_msg)
+                                await message_obj.reply(failure_msg)
                             except Exception as reply_error:
                                 logger.error(f'Error sending failure reply: {reply_error}')
                     
@@ -1415,7 +1990,7 @@ try:
                     worker_queue.task_done()
         
         tasks = []
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         
         # 根据用户要求分配worker：每种类型至少1个
         if worker_count < 3:
@@ -1452,15 +2027,21 @@ try:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    client.loop.run_until_complete(start())
+    main_loop.run_until_complete(start())
     
     # Disconnect the client when done
-    client.disconnect()
+    main_loop.run_until_complete(client.disconnect())
+    main_loop.close()
     logger.info("Telegram client disconnected")
 except Exception as e:
     logger.error(f"Critical error: {e}", exc_info=True)
     # Disconnect the client if an error occurs
-    if client:
-        client.disconnect()
+    if 'main_loop' in locals() and 'client' in locals() and client:
+        try:
+            if not main_loop.is_closed():
+                main_loop.run_until_complete(client.disconnect())
+                main_loop.close()
+        except Exception:
+            pass
         logger.info("Telegram client disconnected due to error")
     raise

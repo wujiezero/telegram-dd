@@ -40,8 +40,8 @@
             /* 更流畅的背景，模拟液态的层次感 */
             background: radial-gradient(circle at top left, #2c3e50 0%, #0d0d0d 60%);
             color: var(--text-primary);
-            line-height: 1.6;
-            padding: 20px;
+            line-height: 1.45;
+            padding: 14px;
         }
 
         .container {
@@ -59,14 +59,14 @@
             border: var(--glass-border);
             /* ---------------------- */
             text-align: center;
-            margin-bottom: 40px;
-            padding: 20px;
+            margin-bottom: 22px;
+            padding: 14px 18px;
         }
 
         h1 {
-            font-size: 2.5rem;
+            font-size: 2rem;
             font-weight: 700;
-            margin-bottom: 10px;
+            margin-bottom: 6px;
             background: linear-gradient(135deg, var(--accent-blue), var(--accent-green));
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
@@ -75,23 +75,23 @@
 
         .subtitle {
             color: var(--text-secondary);
-            font-size: 1.1rem;
+            font-size: 0.95rem;
         }
 
         /* 统计信息网格 */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 15px;
-            margin-bottom: 30px;
+            gap: 10px;
+            margin-bottom: 16px;
         }
 
         /* 服务状态信息卡片的网格布局 (PC/Tablet) */
         .status-info-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 15px;
-            margin-top: 10px;
+            gap: 10px;
+            margin-top: 8px;
         }
 
         /* 统一卡片样式 */
@@ -106,8 +106,8 @@
             border: var(--glass-border);
             /* ---------------------- */
             transition: var(--transition);
-            padding: 18px;
-            margin-bottom: 15px;
+            padding: 12px 14px;
+            margin-bottom: 10px;
             /* 统一间距 */
         }
 
@@ -119,14 +119,14 @@
 
         .stat-label {
             color: var(--text-secondary);
-            font-size: 0.9rem;
-            margin-bottom: 8px;
+            font-size: 0.75rem;
+            margin-bottom: 4px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
 
         .stat-value {
-            font-size: 1.8rem;
+            font-size: 1.35rem;
             font-weight: 700;
             color: var(--text-primary);
             word-break: break-all;
@@ -135,23 +135,24 @@
 
         /* Service Status Section 容器 (不使用 Glass 效果，由内部卡片承载) */
         .status-section {
-            padding: 20px;
+            padding: 10px 4px;
             border-radius: var(--border-radius);
-            margin-bottom: 30px;
+            margin-bottom: 14px;
         }
 
         h2 {
-            font-size: 1.8rem;
+            font-size: 1.3rem;
             font-weight: 600;
-            margin-bottom: 20px;
+            margin-bottom: 12px;
             color: var(--text-primary);
         }
 
         /* Proxy and Telegram Account Cards (继承 stat-card 基础样式) */
         .proxy-info,
-        .telegram-user {
+        .telegram-user,
+        .auth-card {
             /* 覆盖基础样式，使用更柔和的背景色和强调边框 */
-            padding: 15px;
+            padding: 12px;
             margin: 0;
             border-left: 4px solid;
             /* 使用 accent 颜色 */
@@ -164,7 +165,7 @@
 
         .proxy-info h3 {
             color: var(--accent-blue);
-            margin-bottom: 8px;
+            margin-bottom: 6px;
         }
 
         .telegram-user {
@@ -174,23 +175,311 @@
 
         .telegram-user h3 {
             color: var(--accent-green);
-            margin-bottom: 8px;
+            margin-bottom: 6px;
+        }
+
+        .auth-card {
+            background-color: rgba(255, 214, 10, 0.12);
+            border-color: var(--accent-yellow);
+        }
+
+        .auth-card h3 {
+            color: var(--accent-yellow);
+            margin-bottom: 6px;
         }
 
         .proxy-info p,
-        .telegram-user p {
-            margin: 5px 0;
-            font-size: 0.95rem;
+        .telegram-user p,
+        .auth-card p {
+            margin: 3px 0;
+            font-size: 0.85rem;
             color: var(--text-secondary);
+        }
+
+        .auth-form {
+            display: grid;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .auth-form input {
+            width: 100%;
+            padding: 8px 10px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            background-color: rgba(255, 255, 255, 0.08);
+            color: var(--text-primary);
+        }
+
+        .auth-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .auth-btn {
+            padding: 7px 11px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.85rem;
+        }
+
+        .auth-btn:disabled {
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+
+        .auth-btn-primary {
+            background-color: var(--accent-blue);
+            color: white;
+        }
+
+        .auth-btn-secondary {
+            background-color: rgba(255, 255, 255, 0.12);
+            color: var(--text-primary);
+        }
+
+        .auth-message {
+            margin-top: 8px;
+            font-size: 0.82rem;
+            color: var(--text-secondary);
+        }
+
+        .auth-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 6px;
+            padding: 4px 8px;
+            border-radius: 999px;
+            font-size: 0.76rem;
+            font-weight: 600;
+        }
+
+        .auth-badge-ready {
+            background-color: rgba(48, 209, 88, 0.16);
+            color: var(--accent-green);
+        }
+
+        .auth-badge-waiting {
+            background-color: rgba(255, 214, 10, 0.16);
+            color: var(--accent-yellow);
+        }
+
+        .telegram-user-name {
+            color: var(--text-primary);
+            font-weight: 600;
+        }
+
+        .telegram-user-secondary {
+            color: var(--text-secondary);
+            font-size: 0.92rem;
+        }
+
+        .channel-card {
+            background-color: rgba(94, 92, 230, 0.14);
+            border-color: #7d7aff;
+        }
+
+        .channel-card h3 {
+            color: #a8a5ff;
+            margin-bottom: 6px;
+        }
+
+        .channel-name {
+            color: var(--text-primary);
+            font-weight: 600;
+            font-size: 0.95rem;
+            word-break: break-word;
+        }
+
+        .channel-meta {
+            color: var(--text-secondary);
+            font-size: 0.82rem;
+            margin-top: 3px;
+            word-break: break-all;
+        }
+
+        .screen-overlay {
+            position: fixed;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(5, 8, 12, 0.72);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            z-index: 9999;
+        }
+
+        .screen-overlay.is-visible {
+            display: flex;
+        }
+
+        .screen-overlay-card {
+            min-width: 260px;
+            max-width: 420px;
+            padding: 24px 28px;
+            text-align: center;
+            background-color: rgba(28, 28, 30, 0.82);
+            border-radius: var(--border-radius);
+            box-shadow: var(--glass-shadow);
+            border: var(--glass-border);
+        }
+
+        .screen-overlay-spinner {
+            width: 42px;
+            height: 42px;
+            margin: 0 auto 14px;
+            border-radius: 50%;
+            border: 4px solid rgba(255, 255, 255, 0.18);
+            border-top-color: var(--accent-blue);
+            animation: overlay-spin 0.8s linear infinite;
+        }
+
+        .screen-overlay-text {
+            color: var(--text-primary);
+            font-size: 1rem;
+            font-weight: 600;
+        }
+
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(5, 8, 12, 0.78);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            z-index: 10000;
+        }
+
+        .modal-backdrop.is-visible {
+            display: flex;
+        }
+
+        .modal-card {
+            width: min(560px, 100%);
+            background: linear-gradient(180deg, rgba(34, 36, 44, 0.95), rgba(22, 24, 31, 0.92));
+            border: var(--glass-border);
+            box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+            border-radius: 22px;
+            padding: 26px;
+        }
+
+        .modal-title {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 8px;
+        }
+
+        .modal-description {
+            color: var(--text-secondary);
+            font-size: 0.96rem;
+            margin-bottom: 18px;
+        }
+
+        .modal-field-label {
+            display: block;
+            margin-bottom: 8px;
+            color: var(--text-primary);
+            font-weight: 600;
+        }
+
+        .modal-input {
+            width: 100%;
+            padding: 14px 16px;
+            border-radius: 14px;
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-primary);
+            font-size: 1rem;
+            outline: none;
+            transition: var(--transition);
+        }
+
+        .modal-input:focus {
+            border-color: rgba(10, 132, 255, 0.7);
+            box-shadow: 0 0 0 4px rgba(10, 132, 255, 0.14);
+        }
+
+        .modal-hint {
+            margin-top: 10px;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .modal-option {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 14px;
+            padding: 10px 12px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .modal-option input {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--accent-blue);
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+            margin-top: 22px;
+        }
+
+        .modal-btn {
+            min-width: 108px;
+            padding: 11px 16px;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: var(--transition);
+        }
+
+        .modal-btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+        }
+
+        .modal-btn-primary {
+            background: linear-gradient(135deg, var(--accent-blue), #41b0ff);
+            color: white;
+            box-shadow: 0 12px 30px rgba(10, 132, 255, 0.28);
+        }
+
+        .modal-btn:hover {
+            transform: translateY(-1px);
+        }
+
+        @keyframes overlay-spin {
+            from {
+                transform: rotate(0deg);
+            }
+            to {
+                transform: rotate(360deg);
+            }
         }
 
         /* --- Filter Controls --- */
 
         .filter-controls {
-            margin-bottom: 20px;
+            margin-bottom: 12px;
             display: flex;
             flex-wrap: wrap;
-            gap: 15px;
+            gap: 10px;
             align-items: flex-end;
             /* PC 端：确保过滤器和按钮底部对齐 */
         }
@@ -198,21 +487,21 @@
         /* PC 端：调整按钮组的父容器，使其靠右对齐 */
         .filter-controls>div[style*="margin-left: auto"] {
             display: flex;
-            gap: 10px;
+            gap: 8px;
             align-items: flex-end;
             margin-left: auto;
-            padding-bottom: 5px;
+            padding-bottom: 2px;
         }
 
         .filter-group {
             display: flex;
             flex-direction: column;
-            gap: 5px;
+            gap: 4px;
         }
 
         .filter-group label {
             color: var(--text-secondary);
-            font-size: 0.9rem;
+            font-size: 0.78rem;
         }
 
         /* 增强表单元素，使其融入玻璃卡片 */
@@ -221,18 +510,18 @@
             background-color: rgba(255, 255, 255, 0.1);
             border: 1px solid rgba(255, 255, 255, 0.15);
             color: var(--text-primary);
-            padding: 8px 12px;
+            padding: 7px 10px;
             border-radius: 8px;
-            font-size: 1rem;
-            min-width: 200px;
+            font-size: 0.9rem;
+            min-width: 170px;
         }
 
         /* 统一所有 filter-controls 内部 button 的基本样式 */
         .filter-controls button {
-            padding: 8px 16px;
+            padding: 7px 12px;
             border: none;
             border-radius: 8px;
-            font-size: 1rem;
+            font-size: 0.88rem;
             font-weight: 600;
             cursor: pointer;
             transition: var(--transition);
@@ -255,40 +544,94 @@
             box-shadow: 0 4px 6px rgba(52, 199, 89, 0.4);
         }
 
-        /* --- Task List Styles (保持不变) --- */
+        .task-table-header,
+        .task-row-summary {
+            display: grid;
+            grid-template-columns: 38px minmax(0, 2.2fr) minmax(78px, 0.75fr) minmax(92px, 0.9fr) minmax(84px, 0.8fr) minmax(130px, 1fr) minmax(120px, 1fr) auto;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .task-table-header {
+            padding: 0 10px 6px;
+            color: var(--text-secondary);
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
         .task-list {
             display: flex;
             flex-direction: column;
-            gap: 15px;
+            gap: 6px;
         }
 
         .task-item {
-            padding: 20px;
-            border-left: 4px solid var(--accent-blue);
+            padding: 8px 10px;
+            border-left: 3px solid var(--accent-blue);
         }
 
         .task-item:hover {
-            transform: translateX(4px);
+            transform: translateX(2px);
             box-shadow: var(--glass-shadow);
         }
 
-        .task-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 10px;
+        .task-summary-cell {
+            min-width: 0;
+            font-size: 0.74rem;
+            color: var(--text-secondary);
         }
 
         .task-name {
             font-weight: 600;
-            font-size: 1.1rem;
+            font-size: 0.84rem;
+            line-height: 1.2;
+            color: var(--text-primary);
+            min-width: 0;
+            word-break: break-word;
+        }
+
+        .task-name-wrap {
+            min-width: 0;
+        }
+
+        .task-name-sub {
+            font-size: 0.68rem;
+            color: var(--text-secondary);
+            margin-top: 2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .task-toggle {
+            width: 26px;
+            height: 26px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 0.8rem;
+            line-height: 1;
+        }
+
+        .task-toggle:disabled {
+            cursor: default;
+            opacity: 0.45;
+        }
+
+        .task-toggle.is-open {
+            color: var(--text-primary);
+            border-color: rgba(10, 132, 255, 0.4);
         }
 
         .task-status {
-            padding: 4px 12px;
-            border-radius: 16px;
-            font-size: 0.85rem;
+            padding: 3px 8px;
+            border-radius: 999px;
+            font-size: 0.74rem;
             font-weight: 600;
+            white-space: nowrap;
         }
 
         .status-downloading {
@@ -306,21 +649,17 @@
             color: var(--accent-green);
         }
 
-        .task-meta {
-            display: flex;
-            justify-content: space-between;
-            margin-top: 5px;
-            font-size: 0.85rem;
+        .task-progress {
+            font-size: 0.72rem;
             color: var(--text-secondary);
-            flex-wrap: wrap;
-            gap: 10px;
+            min-width: 0;
         }
 
         .progress-bar-container {
             background-color: rgba(255, 255, 255, 0.1);
             border-radius: 8px;
-            height: 8px;
-            margin-top: 5px;
+            height: 4px;
+            margin-top: 3px;
             overflow: hidden;
         }
 
@@ -333,15 +672,16 @@
 
         .task-actions {
             display: flex;
-            gap: 10px;
-            margin-top: 15px;
+            gap: 6px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
         }
 
         .task-btn {
-            padding: 8px 16px;
+            padding: 4px 8px;
             border: none;
             border-radius: 6px;
-            font-size: 0.9rem;
+            font-size: 0.72rem;
             font-weight: 600;
             cursor: pointer;
             transition: var(--transition);
@@ -363,6 +703,140 @@
         .rename-btn {
             background-color: #ff9500;
             color: white;
+        }
+
+        .retry-btn {
+            background-color: #30d158;
+            color: white;
+        }
+
+        .task-thumbnail {
+            flex-shrink: 0;
+            align-self: flex-start;
+        }
+
+        .task-thumbnail-image,
+        .task-thumbnail-placeholder {
+            width: 30px;
+            height: 30px;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .task-thumbnail-image {
+            object-fit: cover;
+        }
+
+        .task-thumbnail-placeholder {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            font-size: 0.82rem;
+        }
+
+        .task-details {
+            margin-top: 4px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px 6px;
+            padding: 8px 10px 2px 38px;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .task-detail {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            word-break: break-word;
+        }
+
+        .task-detail strong {
+            color: var(--text-primary);
+        }
+
+        .task-detail-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 6px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        .task-detail-block {
+            width: 100%;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .task-detail-thumbnail {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .task-empty-toggle {
+            width: 26px;
+            height: 26px;
+        }
+
+        .task-link {
+            color: var(--accent-blue);
+            text-decoration: none;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 100%;
+            display: inline-block;
+        }
+
+        .task-link:hover {
+            text-decoration: underline;
+        }
+
+        .status-failed {
+            background-color: rgba(255, 69, 58, 0.2);
+            color: #ff453a;
+        }
+
+        .status-interrupted {
+            background-color: rgba(191, 90, 242, 0.2);
+            color: #bf5af2;
+        }
+
+        .task-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            z-index: 9999;
+        }
+
+        .toast {
+            min-width: 240px;
+            max-width: 360px;
+            padding: 10px 12px;
+            border-radius: 10px;
+            color: var(--text-primary);
+            background: rgba(20, 20, 22, 0.92);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            box-shadow: var(--glass-shadow);
+        }
+
+        .toast-error {
+            border-color: rgba(255, 69, 58, 0.5);
+        }
+
+        .toast-success {
+            border-color: rgba(48, 209, 88, 0.5);
         }
 
         /* --- 响应式调整 (Mobile Optimization) --- */
@@ -392,8 +866,8 @@
             .filter-controls {
                 flex-direction: column;
                 align-items: stretch;
-                gap: 10px;
-                margin-bottom: 15px;
+                gap: 8px;
+                margin-bottom: 10px;
             }
 
             /* 覆盖 PC 端的按钮容器样式，确保其 100% 宽度 */
@@ -410,26 +884,61 @@
             /* 按钮优化：等分宽度并增加点击区域 */
             .filter-controls button {
                 flex-grow: 1;
-                padding: 12px 16px;
-                font-size: 1rem;
+                padding: 9px 12px;
+                font-size: 0.9rem;
             }
 
             .filter-group input,
             .filter-group select {
                 min-width: auto;
                 width: 100%;
-                padding: 10px 12px;
+                padding: 8px 10px;
             }
 
-            /* 任务操作按钮优化：在极小屏幕上堆叠 */
+            .task-table-header {
+                display: none;
+            }
+
+            .task-item {
+                padding: 9px 10px;
+            }
+
+            .task-row-summary {
+                grid-template-columns: 32px minmax(0, 1fr);
+                gap: 8px;
+                align-items: flex-start;
+            }
+
+            .task-summary-mobile {
+                display: grid;
+                gap: 6px;
+                min-width: 0;
+            }
+
+            .task-summary-mobile-top {
+                display: flex;
+                justify-content: space-between;
+                align-items: flex-start;
+                gap: 8px;
+            }
+
+            .task-summary-mobile-meta {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 4px 8px;
+                font-size: 0.7rem;
+                color: var(--text-secondary);
+            }
+
             .task-actions {
                 flex-direction: column;
                 gap: 5px;
+                justify-content: flex-start;
             }
 
             .task-btn {
                 width: 100%;
-                padding: 10px;
+                padding: 8px 10px;
                 font-size: 0.9rem;
             }
 
@@ -439,6 +948,10 @@
                 gap: 10px;
                 align-items: stretch;
             }
+
+            .task-details {
+                padding-left: 0;
+            }
         }
 
         @media (max-width: 480px) {
@@ -447,36 +960,38 @@
             }
 
             .stat-value {
-                font-size: 1.6rem;
+                font-size: 1.2rem;
             }
 
             h2 {
-                font-size: 1.4rem;
+                font-size: 1.2rem;
             }
         }
 
         .empty-state {
             text-align: center;
-            padding: 40px;
+            padding: 24px;
             color: var(--text-secondary);
             font-style: italic;
         }
 
         /* Pagination */
         .pagination {
-            margin-top: 20px;
+            margin-top: 12px;
             display: flex;
             justify-content: space-between;
             align-items: center;
+            gap: 10px;
+            font-size: 0.82rem;
         }
 
         .pagination button {
-            padding: 6px 12px;
+            padding: 5px 9px;
             background-color: var(--card-bg);
             color: var(--text-primary);
             border: 1px solid var(--text-secondary);
             border-radius: 6px;
-            font-size: 0.9rem;
+            font-size: 0.8rem;
             cursor: pointer;
             transition: var(--transition);
         }
@@ -487,7 +1002,7 @@
         }
 
         .pagination .page-btn {
-            margin: 0 5px;
+            margin: 0 2px;
         }
 
         .pagination .page-btn.active {
@@ -523,10 +1038,6 @@
                 <div class="stat-value">v{{ version }}</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Channel ID</div>
-                <div class="stat-value" id="channel-id">Loading...</div>
-            </div>
-            <div class="stat-card">
                 <div class="stat-label">Total Tasks</div>
                 <div class="stat-value" id="total-tasks">0</div>
             </div>
@@ -550,11 +1061,37 @@
 
                 <div class="telegram-user stat-card">
                     <h3>Telegram Account</h3>
-                    {% if telegram_user %}
-                    <p><strong>Name:</strong> {{ telegram_user.first_name }} {{ telegram_user.last_name }}</p>
-                    {% else %}
-                    <p>Not logged in</p>
-                    {% endif %}
+                    <div id="telegram-user-panel">
+                        {% if telegram_user %}
+                        <p class="telegram-user-name">{{ telegram_user.first_name }} {{ telegram_user.last_name }}</p>
+                        {% if telegram_user.username %}
+                        <p class="telegram-user-secondary">@{{ telegram_user.username }}</p>
+                        {% endif %}
+                        {% else %}
+                        <p>Not logged in</p>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="channel-card stat-card">
+                    <h3>Target Channel</h3>
+                    <div id="channel-panel">
+                        <p class="channel-name">Loading channel...</p>
+                        <p class="channel-meta" id="channel-id">ID: Loading...</p>
+                    </div>
+                </div>
+
+                <div class="auth-card stat-card">
+                    <h3>Telegram Login</h3>
+                    <div id="auth-panel">
+                        {% if auth_state.authorized %}
+                        <div class="auth-badge auth-badge-ready">Authorized</div>
+                        <p class="auth-message">{{ auth_state.message }}</p>
+                        {% else %}
+                        <div class="auth-badge auth-badge-waiting">Login Required</div>
+                        <p class="auth-message">{{ auth_state.message }}</p>
+                        {% endif %}
+                    </div>
                 </div>
             </div>
         </div>
@@ -595,6 +1132,8 @@
                         <option value="downloading">Downloading</option>
                         <option value="queued">Queued</option>
                         <option value="completed">Completed</option>
+                        <option value="failed">Failed</option>
+                        <option value="interrupted">Interrupted</option>
                     </select>
                 </div>
 
@@ -614,6 +1153,16 @@
                 </div>
             </div>
 
+            <div class="task-table-header">
+                <div></div>
+                <div>Name</div>
+                <div>Type</div>
+                <div>Status</div>
+                <div>Size</div>
+                <div>Time</div>
+                <div>Progress</div>
+                <div>Actions</div>
+            </div>
             <div class="task-list" id="task-list">
                 <div class="empty-state">Loading tasks...</div>
             </div>
@@ -629,6 +1178,46 @@
                         </div>
                     <button id="next-page" disabled>Next</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast-container" class="toast-container"></div>
+    <div id="screen-overlay" class="screen-overlay" aria-hidden="true">
+        <div class="screen-overlay-card">
+            <div class="screen-overlay-spinner"></div>
+            <div id="screen-overlay-text" class="screen-overlay-text">Sending verification code...</div>
+        </div>
+    </div>
+    <div id="retry-modal" class="modal-backdrop" aria-hidden="true">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="retry-modal-title">
+            <div class="modal-title" id="retry-modal-title">Retry Download</div>
+            <div class="modal-description" id="retry-modal-description"></div>
+            <label class="modal-field-label" for="retry-modal-input">Target directory</label>
+            <input id="retry-modal-input" class="modal-input" type="text" autocomplete="off">
+            <div class="modal-hint">分类和文件名规则会沿用当前系统逻辑，这里只修改本次重试的目标目录。</div>
+            <div class="modal-actions">
+                <button id="retry-modal-cancel" class="modal-btn modal-btn-secondary" type="button">Cancel</button>
+                <button id="retry-modal-confirm" class="modal-btn modal-btn-primary" type="button">Confirm Retry</button>
+            </div>
+        </div>
+    </div>
+    <div id="action-modal" class="modal-backdrop" aria-hidden="true">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="action-modal-title">
+            <div class="modal-title" id="action-modal-title"></div>
+            <div class="modal-description" id="action-modal-description"></div>
+            <div id="action-modal-field">
+                <label class="modal-field-label" id="action-modal-label" for="action-modal-input"></label>
+                <input id="action-modal-input" class="modal-input" type="text" autocomplete="off">
+                <div id="action-modal-hint" class="modal-hint"></div>
+            </div>
+            <label id="action-modal-option" class="modal-option">
+                <input id="action-modal-checkbox" type="checkbox">
+                <span id="action-modal-option-text"></span>
+            </label>
+            <div class="modal-actions">
+                <button id="action-modal-cancel" class="modal-btn modal-btn-secondary" type="button">Cancel</button>
+                <button id="action-modal-confirm" class="modal-btn modal-btn-primary" type="button"></button>
             </div>
         </div>
     </div>
@@ -669,6 +1258,442 @@
                 return (bytes / megabyte).toFixed(2) + ' MB';
             } else {
                 return (bytes / kilobyte).toFixed(2) + ' KB';
+            }
+        }
+
+        async function apiRequest(url, options = {}) {
+            const response = await fetch(url, options);
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                const error = new Error(data.error || 'Request failed');
+                error.status = response.status;
+                error.payload = data;
+                throw error;
+            }
+            return data;
+        }
+
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            toast.textContent = message;
+            container.appendChild(toast);
+            window.setTimeout(() => {
+                toast.remove();
+            }, 4000);
+        }
+
+        let authState = {
+            authorized: {{ 'true' if auth_state.authorized else 'false' }},
+            awaiting_code: {{ 'true' if auth_state.awaiting_code else 'false' }},
+            requires_password: {{ 'true' if auth_state.requires_password else 'false' }},
+            phone: {{ auth_state.phone|tojson }},
+            resend_available_in: {{ auth_state.resend_available_in|default(0)|int }},
+            message: {{ auth_state.message|tojson }}
+        };
+        let telegramUser = {{ telegram_user|tojson if telegram_user else 'null' }};
+        let telegramChannel = null;
+        let sendCodeCooldownUntil = 0;
+        let sendCodeCooldownTimer = null;
+        let overlayVisible = false;
+        let retryModalState = null;
+        let actionModalState = null;
+
+        function showScreenOverlay(message = 'Sending verification code...') {
+            overlayVisible = true;
+            const overlay = document.getElementById('screen-overlay');
+            const text = document.getElementById('screen-overlay-text');
+            text.textContent = message;
+            overlay.classList.add('is-visible');
+            overlay.setAttribute('aria-hidden', 'false');
+        }
+
+        function hideScreenOverlay() {
+            overlayVisible = false;
+            const overlay = document.getElementById('screen-overlay');
+            overlay.classList.remove('is-visible');
+            overlay.setAttribute('aria-hidden', 'true');
+        }
+
+        function renderTelegramUserPanel() {
+            const panel = document.getElementById('telegram-user-panel');
+            if (!panel) {
+                return;
+            }
+
+            panel.innerHTML = '';
+
+            if (!telegramUser) {
+                const placeholder = document.createElement('p');
+                placeholder.textContent = 'Not logged in';
+                panel.appendChild(placeholder);
+                return;
+            }
+
+            const name = document.createElement('p');
+            name.className = 'telegram-user-name';
+            name.textContent = [telegramUser.first_name, telegramUser.last_name].filter(Boolean).join(' ') || telegramUser.username || 'Authorized';
+            panel.appendChild(name);
+
+            if (telegramUser.username) {
+                const username = document.createElement('p');
+                username.className = 'telegram-user-secondary';
+                username.textContent = `@${telegramUser.username}`;
+                panel.appendChild(username);
+            }
+        }
+
+        function renderChannelPanel() {
+            const panel = document.getElementById('channel-panel');
+            if (!panel) {
+                return;
+            }
+
+            panel.innerHTML = '';
+
+            const channelName = document.createElement('p');
+            channelName.className = 'channel-name';
+            channelName.textContent = telegramChannel?.title || 'Unknown Channel';
+            panel.appendChild(channelName);
+
+            if (telegramChannel?.username) {
+                const username = document.createElement('p');
+                username.className = 'channel-meta';
+                username.textContent = `@${telegramChannel.username}`;
+                panel.appendChild(username);
+            }
+
+            const channelId = document.createElement('p');
+            channelId.className = 'channel-meta';
+            channelId.id = 'channel-id';
+            channelId.textContent = `ID: ${telegramChannel?.id ?? 'Loading...'}`;
+            panel.appendChild(channelId);
+        }
+
+        function openRetryModal(task) {
+            const modal = document.getElementById('retry-modal');
+            const description = document.getElementById('retry-modal-description');
+            const input = document.getElementById('retry-modal-input');
+            const preferredDirectory = task.targetDir || task.downloadDirectory || '';
+
+            retryModalState = { task };
+            description.textContent = `Choose where "${task.filename}" should be downloaded this time.`;
+            input.value = preferredDirectory;
+            modal.classList.add('is-visible');
+            modal.setAttribute('aria-hidden', 'false');
+            window.setTimeout(() => {
+                input.focus();
+                input.select();
+            }, 0);
+        }
+
+        function closeRetryModal() {
+            const modal = document.getElementById('retry-modal');
+            modal.classList.remove('is-visible');
+            modal.setAttribute('aria-hidden', 'true');
+            retryModalState = null;
+        }
+
+        function openActionModal(config) {
+            const modal = document.getElementById('action-modal');
+            const title = document.getElementById('action-modal-title');
+            const description = document.getElementById('action-modal-description');
+            const field = document.getElementById('action-modal-field');
+            const label = document.getElementById('action-modal-label');
+            const input = document.getElementById('action-modal-input');
+            const hint = document.getElementById('action-modal-hint');
+            const confirm = document.getElementById('action-modal-confirm');
+            const option = document.getElementById('action-modal-option');
+            const optionCheckbox = document.getElementById('action-modal-checkbox');
+            const optionText = document.getElementById('action-modal-option-text');
+
+            actionModalState = config;
+            title.textContent = config.title || '';
+            description.textContent = config.description || '';
+            confirm.textContent = config.confirmText || 'Confirm';
+
+            if (config.input) {
+                field.style.display = 'block';
+                label.textContent = config.input.label || '';
+                input.value = config.input.value || '';
+                input.placeholder = config.input.placeholder || '';
+                hint.textContent = config.input.hint || '';
+                window.setTimeout(() => {
+                    input.focus();
+                    input.select();
+                }, 0);
+            } else {
+                field.style.display = 'none';
+                input.value = '';
+                input.placeholder = '';
+                hint.textContent = '';
+            }
+
+            if (config.option) {
+                option.style.display = 'flex';
+                optionCheckbox.checked = Boolean(config.option.checked);
+                optionText.textContent = config.option.label || '';
+            } else {
+                option.style.display = 'none';
+                optionCheckbox.checked = false;
+                optionText.textContent = '';
+            }
+
+            modal.classList.add('is-visible');
+            modal.setAttribute('aria-hidden', 'false');
+        }
+
+        function closeActionModal() {
+            const modal = document.getElementById('action-modal');
+            modal.classList.remove('is-visible');
+            modal.setAttribute('aria-hidden', 'true');
+            actionModalState = null;
+        }
+
+        async function confirmActionModal() {
+            if (!actionModalState?.onConfirm) {
+                return;
+            }
+
+            const value = actionModalState.input
+                ? (document.getElementById('action-modal-input')?.value || '')
+                : '';
+            const checked = document.getElementById('action-modal-checkbox')?.checked || false;
+            await actionModalState.onConfirm(value, checked);
+        }
+
+        async function confirmRetryModal() {
+            if (!retryModalState?.task) {
+                return;
+            }
+
+            const task = retryModalState.task;
+            const retryDirectory = (document.getElementById('retry-modal-input')?.value || '').trim();
+            if (!retryDirectory) {
+                showToast('Retry directory cannot be empty', 'error');
+                return;
+            }
+
+            try {
+                const result = await apiRequest(
+                    `/api/retry?task_id=${encodeURIComponent(task.id)}&retry_dir=${encodeURIComponent(retryDirectory)}`,
+                    {
+                        method: 'POST'
+                    }
+                );
+                closeRetryModal();
+                await initializeTasks();
+                showToast(result.message || `Retry queued for ${task.filename}`);
+            } catch (error) {
+                console.error('Error retrying task:', error);
+                showToast(`Failed to retry task: ${error.message}`, 'error');
+            }
+        }
+
+        function getSendCodeRemainingSeconds() {
+            if (!sendCodeCooldownUntil) {
+                return 0;
+            }
+            return Math.max(0, Math.ceil((sendCodeCooldownUntil - Date.now()) / 1000));
+        }
+
+        function startSendCodeCooldown(seconds) {
+            const cooldownSeconds = Number(seconds) || 0;
+            if (sendCodeCooldownTimer) {
+                window.clearInterval(sendCodeCooldownTimer);
+                sendCodeCooldownTimer = null;
+            }
+
+            if (cooldownSeconds <= 0) {
+                sendCodeCooldownUntil = 0;
+                renderAuthPanel();
+                return;
+            }
+
+            sendCodeCooldownUntil = Date.now() + cooldownSeconds * 1000;
+            renderAuthPanel();
+
+            sendCodeCooldownTimer = window.setInterval(() => {
+                const remaining = getSendCodeRemainingSeconds();
+                if (remaining <= 0) {
+                    window.clearInterval(sendCodeCooldownTimer);
+                    sendCodeCooldownTimer = null;
+                    sendCodeCooldownUntil = 0;
+                }
+                renderAuthPanel();
+            }, 1000);
+        }
+
+        function renderAuthPanel() {
+            const panel = document.getElementById('auth-panel');
+            panel.innerHTML = '';
+            const resendAvailableIn = getSendCodeRemainingSeconds() || Number(authState.resend_available_in) || 0;
+
+            const badge = document.createElement('div');
+            badge.className = `auth-badge ${authState.authorized ? 'auth-badge-ready' : 'auth-badge-waiting'}`;
+            badge.textContent = authState.authorized ? 'Authorized' : 'Login Required';
+            panel.appendChild(badge);
+
+            const message = document.createElement('p');
+            message.className = 'auth-message';
+            message.textContent = authState.message || (authState.authorized ? 'Telegram is ready.' : 'Please sign in.');
+            panel.appendChild(message);
+
+            if (authState.authorized) {
+                return;
+            }
+
+            const form = document.createElement('div');
+            form.className = 'auth-form';
+
+            const phoneInput = document.createElement('input');
+            phoneInput.id = 'auth-phone';
+            phoneInput.placeholder = 'Phone number (for example +8613800138000)';
+            phoneInput.value = authState.phone || '';
+            form.appendChild(phoneInput);
+
+            if (authState.awaiting_code) {
+                const codeInput = document.createElement('input');
+                codeInput.id = 'auth-code';
+                codeInput.placeholder = 'Verification code';
+                form.appendChild(codeInput);
+            }
+
+            if (authState.requires_password) {
+                const passwordInput = document.createElement('input');
+                passwordInput.id = 'auth-password';
+                passwordInput.type = 'password';
+                passwordInput.placeholder = 'Two-step verification password';
+                form.appendChild(passwordInput);
+            }
+
+            const actions = document.createElement('div');
+            actions.className = 'auth-actions';
+
+            const sendCodeBtn = document.createElement('button');
+            sendCodeBtn.className = 'auth-btn auth-btn-primary';
+            sendCodeBtn.textContent = resendAvailableIn > 0
+                ? `Resend in ${resendAvailableIn}s`
+                : (authState.awaiting_code ? 'Resend Code' : 'Send Code');
+            sendCodeBtn.disabled = resendAvailableIn > 0 || overlayVisible;
+            sendCodeBtn.addEventListener('click', sendAuthCode);
+            actions.appendChild(sendCodeBtn);
+
+            if (authState.awaiting_code) {
+                const verifyBtn = document.createElement('button');
+                verifyBtn.className = 'auth-btn auth-btn-secondary';
+                verifyBtn.textContent = 'Verify Code';
+                verifyBtn.addEventListener('click', verifyAuthCode);
+                actions.appendChild(verifyBtn);
+            }
+
+            if (authState.requires_password) {
+                const passwordBtn = document.createElement('button');
+                passwordBtn.className = 'auth-btn auth-btn-secondary';
+                passwordBtn.textContent = 'Verify Password';
+                passwordBtn.addEventListener('click', verifyAuthPassword);
+                actions.appendChild(passwordBtn);
+            }
+
+            form.appendChild(actions);
+            panel.appendChild(form);
+        }
+
+        async function refreshAuthStatus() {
+            try {
+                authState = await apiRequest('/api/auth/status');
+                if (!getSendCodeRemainingSeconds() && authState.resend_available_in) {
+                    startSendCodeCooldown(authState.resend_available_in);
+                }
+                renderAuthPanel();
+                if (authState.authorized) {
+                    await updateStatusData();
+                }
+            } catch (error) {
+                console.error('Failed to refresh auth status:', error);
+            }
+        }
+
+        async function sendAuthCode() {
+            const phone = (document.getElementById('auth-phone')?.value || '').trim();
+            if (!phone) {
+                showToast('Please enter a phone number first.', 'error');
+                return;
+            }
+
+            const remaining = getSendCodeRemainingSeconds();
+            if (remaining > 0) {
+                showToast(`Please wait ${remaining} seconds before sending another code.`, 'error');
+                return;
+            }
+
+            try {
+                showScreenOverlay('Sending verification code...');
+                authState = await apiRequest('/api/auth/send-code', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ phone })
+                });
+                startSendCodeCooldown(authState.resend_available_in || 60);
+                renderAuthPanel();
+                showToast(authState.message || 'Verification code sent.');
+            } catch (error) {
+                if (error.payload?.resend_available_in) {
+                    startSendCodeCooldown(error.payload.resend_available_in);
+                }
+                showToast(`Failed to send code: ${error.message}`, 'error');
+            } finally {
+                hideScreenOverlay();
+            }
+        }
+
+        async function verifyAuthCode() {
+            const phone = (document.getElementById('auth-phone')?.value || authState.phone || '').trim();
+            const code = (document.getElementById('auth-code')?.value || '').trim();
+            if (!phone || !code) {
+                showToast('Phone number and verification code are required.', 'error');
+                return;
+            }
+
+            try {
+                authState = await apiRequest('/api/auth/verify-code', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ phone, code })
+                });
+                renderAuthPanel();
+                showToast(authState.message || 'Verification complete.');
+                if (authState.authorized) {
+                    await updateStatusData();
+                    await refreshAuthStatus();
+                }
+            } catch (error) {
+                showToast(`Failed to verify code: ${error.message}`, 'error');
+            }
+        }
+
+        async function verifyAuthPassword() {
+            const password = document.getElementById('auth-password')?.value || '';
+            if (!password) {
+                showToast('Please enter your two-step verification password.', 'error');
+                return;
+            }
+
+            try {
+                authState = await apiRequest('/api/auth/verify-password', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password })
+                });
+                renderAuthPanel();
+                showToast(authState.message || 'Password verified.');
+                if (authState.authorized) {
+                    await updateStatusData();
+                    await refreshAuthStatus();
+                }
+            } catch (error) {
+                showToast(`Failed to verify password: ${error.message}`, 'error');
             }
         }
 
@@ -714,13 +1739,17 @@
             taskItems.forEach(item => {
                 const taskName = item.querySelector('.task-name').textContent;
                 if (taskName === progressData.filename) {
-                    // Update progress text
                     const progressElement = item.querySelector('.task-progress');
                     if (progressElement) {
-                        progressElement.textContent = `${progressData.progress}%`;
+                        const progressText = `${progressData.progress}%`;
+                        const textNode = Array.from(progressElement.childNodes).find(node => node.nodeType === Node.TEXT_NODE);
+                        if (textNode) {
+                            textNode.textContent = progressText;
+                        } else {
+                            progressElement.insertBefore(document.createTextNode(progressText), progressElement.firstChild);
+                        }
                     }
 
-                    // Update progress bar if it exists
                     const progressBar = item.querySelector('.progress-bar');
                     if (progressBar) {
                         progressBar.style.width = `${progressData.progress}%`;
@@ -753,7 +1782,6 @@
         let currentPage = 1;
         let itemsPerPage = 10;
         let allTasks = [];
-        let filteredTasks = [];
         let totalItems = 0;
         let totalPages = 0;
         let currentFilters = {}; // Store current filters for auto-refresh
@@ -781,38 +1809,34 @@
         }
 
         // Update other status data from API
-        function updateStatusData() {
-            fetch('/api/status')
-                .then(response => response.json())
-                .then(data => {
-                    // Update active downloads, queue size, channel id, and total tasks
-                    document.getElementById('active-downloads').textContent = data.active_downloads;
-                    document.getElementById('queue-size').textContent = data.queue_size;
-                    document.getElementById('channel-id').textContent = data.channel_id;
-                    document.getElementById('total-tasks').textContent = data.total_tasks;
+        async function updateStatusData() {
+            try {
+                const data = await apiRequest('/api/status');
+                document.getElementById('active-downloads').textContent = data.active_downloads;
+                document.getElementById('queue-size').textContent = data.queue_size;
+                document.getElementById('total-tasks').textContent = data.total_tasks;
+                telegramUser = data.telegram_user || null;
+                telegramChannel = data.channel_info || { title: 'Unknown Channel', id: data.channel_id, username: null };
+                renderTelegramUserPanel();
+                renderChannelPanel();
 
-                    // Initialize uptime if not already done
-                    if (!startTime) {
-                        // Parse initial uptime from API response (format: HH:MM:SS)
-                        const uptimeParts = data.uptime.split(':');
-                        initialUptimeSeconds = parseInt(uptimeParts[0]) * 3600 + parseInt(uptimeParts[1]) * 60 + parseInt(uptimeParts[2]);
-                        startTime = Date.now();
-                        // Start local uptime updates
-                        setInterval(updateLocalUptime, 1000);
-                    }
-                });
+                if (!startTime) {
+                    const uptimeParts = data.uptime.split(':');
+                    initialUptimeSeconds = parseInt(uptimeParts[0]) * 3600 + parseInt(uptimeParts[1]) * 60 + parseInt(uptimeParts[2]);
+                    startTime = Date.now();
+                    setInterval(updateLocalUptime, 1000);
+                }
+            } catch (error) {
+                console.error('Failed to update status:', error);
+            }
         }
 
         // Initialize tasks data from API with optional filters
         async function initializeTasks(filters = {}) {
-            // Use currentFilters if no filters provided (for auto-refresh)
             const effectiveFilters = Object.keys(filters).length === 0 ? currentFilters : filters;
-
-            // Get real-time tasks
-            const tasksResponse = await fetch('/api/tasks');
-            const tasksData = await tasksResponse.json();
-            const realTimeTasks = tasksData.tasks.map((task, index) => {
-                return {
+            try {
+                const tasksData = await apiRequest('/api/tasks');
+                const realTimeTasks = tasksData.tasks.map((task, index) => ({
                     id: `real-${index}`,
                     filename: task.filename,
                     status: task.status,
@@ -820,76 +1844,76 @@
                     downloadTime: task.downloadTime || new Date().toISOString().slice(0, 19).replace('T', ' '),
                     progress: task.progress,
                     size: task.size || 0,
-                    isRealTime: true
-                };
-            });
+                    sourceMessageLink: task.source_message_link || '',
+                    isRealTime: true,
+                    canRetry: false,
+                    retryCount: 0,
+                    errorMessage: ''
+                }));
 
-            // Build query string with effective filters
-            let queryString = `?page=${currentPage}&per_page=${itemsPerPage}`;
-            if (effectiveFilters.filename) {
-                queryString += `&filename=${encodeURIComponent(effectiveFilters.filename)}`;
-            }
-            if (effectiveFilters.filetype && effectiveFilters.filetype !== 'all') {
-                queryString += `&file_type=${encodeURIComponent(effectiveFilters.filetype)}`;
-            }
-            if (effectiveFilters.status && effectiveFilters.status !== 'all') {
-                queryString += `&status=${encodeURIComponent(effectiveFilters.status)}`;
-            }
+                let queryString = `?page=${currentPage}&per_page=${itemsPerPage}`;
+                if (effectiveFilters.filename) {
+                    queryString += `&filename=${encodeURIComponent(effectiveFilters.filename)}`;
+                }
+                if (effectiveFilters.filetype && effectiveFilters.filetype !== 'all') {
+                    queryString += `&file_type=${encodeURIComponent(effectiveFilters.filetype)}`;
+                }
+                if (effectiveFilters.status && effectiveFilters.status !== 'all') {
+                    queryString += `&status=${encodeURIComponent(effectiveFilters.status)}`;
+                }
 
-            // Get historical tasks with pagination and filters
-            const historyResponse = await fetch(`/api/history${queryString}`);
-            const historyData = await historyResponse.json();
-            const historicalTasks = historyData.history.map(task => {
-                return {
+                const includeHistory = !['queued', 'downloading'].includes(effectiveFilters.status);
+                const historyData = includeHistory
+                    ? await apiRequest(`/api/history${queryString}`)
+                    : { history: [], total: 0, pages: 0 };
+                const activeTaskKeys = new Set(realTimeTasks.map(task => `${task.status}:${task.filename}`));
+                const historicalTasks = historyData.history.map(task => ({
                     id: `history-${task.id}`,
                     filename: task.filename,
                     status: task.status,
                     type: task.file_type,
                     downloadTime: task.start_time,
-                    progress: task.progress + '%',
+                    progress: `${task.progress}%`,
                     size: task.size || 0,
+                    downloadPath: task.download_path || '',
+                    downloadDirectory: task.download_path ? task.download_path.split('/').slice(0, -1).join('/') : '',
+                    targetDir: task.target_dir || '',
                     thumbnailPath: task.thumbnail_path,
-                    isRealTime: false
-                };
-            });
+                    sourceMessageLink: task.source_message_link || '',
+                    sourceMessageId: task.source_message_id,
+                    retryCount: task.retry_count || 0,
+                    errorMessage: task.error_message || '',
+                    isRealTime: false,
+                    canRetry: Boolean(task.source_message_id && task.source_channel_id)
+                })).filter(task => {
+                    if (!['queued', 'downloading'].includes(task.status)) {
+                        return true;
+                    }
+                    return !activeTaskKeys.has(`${task.status}:${task.filename}`);
+                });
 
-            // Combine real-time tasks with historical tasks, removing duplicates
-            const taskMap = new Map();
+                const taskMap = new Map();
+                realTimeTasks.forEach(task => taskMap.set(`${task.filename}:${task.status}`, task));
+                historicalTasks.forEach(task => taskMap.set(task.id, task));
+                allTasks = Array.from(taskMap.values());
 
-            // Add real-time tasks first (they have priority)
-            realTimeTasks.forEach(task => {
-                taskMap.set(task.filename, task);
-            });
+                const realTimeTasksInFilter = realTimeTasks.filter(task => {
+                    const matchesFilename = !effectiveFilters.filename ||
+                        task.filename.toLowerCase().includes(effectiveFilters.filename.toLowerCase());
+                    const matchesFiletype = !effectiveFilters.filetype || effectiveFilters.filetype === 'all' ||
+                        task.type === effectiveFilters.filetype;
+                    const matchesStatus = !effectiveFilters.status || effectiveFilters.status === 'all' ||
+                        task.status === effectiveFilters.status;
+                    return matchesFilename && matchesFiletype && matchesStatus;
+                });
 
-            // Add historical tasks only if they're not already in the map
-            historicalTasks.forEach(task => {
-                if (!taskMap.has(task.filename)) {
-                    taskMap.set(task.filename, task);
-                }
-            });
-
-            // Convert map back to array
-            allTasks = Array.from(taskMap.values());
-            
-            // Calculate total items correctly
-            const realTimeTasksInFilter = realTimeTasks.filter(task => {
-                const matchesFilename = !effectiveFilters.filename || 
-                    task.filename.toLowerCase().includes(effectiveFilters.filename.toLowerCase());
-                const matchesFiletype = !effectiveFilters.filetype || effectiveFilters.filetype === 'all' || 
-                    task.type === effectiveFilters.filetype;
-                const matchesStatus = !effectiveFilters.status || effectiveFilters.status === 'all' || 
-                    task.status === effectiveFilters.status;
-                return matchesFilename && matchesFiletype && matchesStatus;
-            });
-            
-            totalItems = historyData.total + realTimeTasksInFilter.length;
-            totalPages = Math.ceil(totalItems / itemsPerPage);
-
-            // Clear any existing filters
-            filteredTasks = [];
-
-            // Render tasks directly
-            renderTasks();
+                totalItems = historyData.total + realTimeTasksInFilter.length;
+                totalPages = Math.ceil(totalItems / itemsPerPage);
+                renderTasks();
+            } catch (error) {
+                console.error('Failed to load tasks:', error);
+                showToast(`Failed to load tasks: ${error.message}`, 'error');
+            }
         }
 
         // Apply filters
@@ -921,101 +1945,245 @@
             document.getElementById('items-per-page').value = '10';
             itemsPerPage = 10;
 
-            // Clear filtered tasks
-            filteredTasks = [];
-
-            // Clear current filters
             currentFilters = {};
-
-            // Re-initialize tasks data without filters
             initializeTasks();
         }
 
-        // Render tasks with pagination
+        function getProgressPercent(task) {
+            if (task.status !== 'downloading' || !task.progress) {
+                return 0;
+            }
+            const percentMatch = task.progress.match(/(\d+(?:\.\d+)?) %/);
+            return percentMatch ? parseFloat(percentMatch[1]) : 0;
+        }
+
+        function createTaskThumbnail(task) {
+            if (!task.thumbnailPath) {
+                return null;
+            }
+
+            const thumbnailWrapper = document.createElement('div');
+            thumbnailWrapper.className = 'task-thumbnail';
+
+            const thumbnail = document.createElement('img');
+            thumbnail.className = 'task-thumbnail-image';
+            thumbnail.src = `/api/thumbnail?task_id=${encodeURIComponent(task.id)}`;
+            thumbnail.alt = 'thumbnail';
+            thumbnailWrapper.appendChild(thumbnail);
+            return thumbnailWrapper;
+        }
+
+        function createTaskDetails(task) {
+            const details = document.createElement('div');
+            details.className = 'task-details';
+
+            const thumbnail = createTaskThumbnail(task);
+            if (thumbnail) {
+                const thumbnailRow = document.createElement('div');
+                thumbnailRow.className = 'task-detail task-detail-thumbnail';
+                const thumbnailLabel = document.createElement('strong');
+                thumbnailLabel.textContent = 'Preview:';
+                thumbnailRow.appendChild(thumbnailLabel);
+                thumbnailRow.appendChild(thumbnail);
+                details.appendChild(thumbnailRow);
+            }
+
+            if (task.sourceMessageLink) {
+                const linkRow = document.createElement('div');
+                linkRow.className = 'task-detail task-detail-block';
+                const label = document.createElement('strong');
+                label.textContent = 'Source: ';
+                const link = document.createElement('a');
+                link.className = 'task-link';
+                link.href = task.sourceMessageLink;
+                link.target = '_blank';
+                link.rel = 'noopener noreferrer';
+                link.textContent = task.sourceMessageLink;
+                linkRow.appendChild(label);
+                linkRow.appendChild(link);
+                details.appendChild(linkRow);
+            }
+
+            if (task.downloadPath) {
+                const pathRow = document.createElement('div');
+                pathRow.className = 'task-detail task-detail-block';
+                const pathLabel = document.createElement('strong');
+                pathLabel.textContent = 'Saved at: ';
+                pathRow.appendChild(pathLabel);
+                pathRow.appendChild(document.createTextNode(task.downloadPath));
+                details.appendChild(pathRow);
+            }
+
+            if (task.retryCount) {
+                const retryRow = document.createElement('div');
+                retryRow.className = 'task-detail task-detail-chip';
+                const retryLabel = document.createElement('strong');
+                retryLabel.textContent = 'Retries: ';
+                retryRow.appendChild(retryLabel);
+                retryRow.appendChild(document.createTextNode(String(task.retryCount)));
+                details.appendChild(retryRow);
+            }
+
+            if (task.errorMessage) {
+                const errorRow = document.createElement('div');
+                errorRow.className = 'task-detail task-detail-block';
+                const errorLabel = document.createElement('strong');
+                errorLabel.textContent = 'Last error: ';
+                errorRow.appendChild(errorLabel);
+                errorRow.appendChild(document.createTextNode(task.errorMessage));
+                details.appendChild(errorRow);
+            }
+
+            return details;
+        }
+
+        function taskHasDetails(task) {
+            return Boolean(task.thumbnailPath || task.sourceMessageLink || task.downloadPath || task.retryCount || task.errorMessage);
+        }
+
+        function createTaskActions(task) {
+            const taskActions = document.createElement('div');
+            taskActions.className = 'task-actions';
+
+            if (!task.isRealTime) {
+                const downloadBtn = document.createElement('button');
+                downloadBtn.className = 'task-btn download-btn';
+                downloadBtn.textContent = 'Download';
+                downloadBtn.disabled = task.status !== 'completed' || !task.downloadPath;
+                downloadBtn.addEventListener('click', () => downloadFile(task.id, task.filename));
+                taskActions.appendChild(downloadBtn);
+
+                const renameBtn = document.createElement('button');
+                renameBtn.className = 'task-btn rename-btn';
+                renameBtn.textContent = 'Rename';
+                renameBtn.disabled = task.status === 'downloading' || task.status === 'queued';
+                renameBtn.addEventListener('click', () => renameFile(task.id, task.filename));
+                taskActions.appendChild(renameBtn);
+
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'task-btn delete-btn';
+                deleteBtn.textContent = 'Delete';
+                deleteBtn.addEventListener('click', () => deleteFile(task));
+                taskActions.appendChild(deleteBtn);
+
+                if (task.canRetry) {
+                    const retryBtn = document.createElement('button');
+                    retryBtn.className = 'task-btn retry-btn';
+                    retryBtn.textContent = 'Retry';
+                    retryBtn.disabled = task.status === 'downloading' || task.status === 'queued';
+                    retryBtn.addEventListener('click', () => openRetryModal(task));
+                    taskActions.appendChild(retryBtn);
+                }
+            }
+
+            return taskActions;
+        }
+
+        function createTaskCard(task) {
+            const taskElement = document.createElement('div');
+            taskElement.className = 'task-item';
+
+            const summary = document.createElement('div');
+            summary.className = 'task-row-summary';
+
+            const hasDetails = taskHasDetails(task);
+            const toggle = document.createElement('button');
+            toggle.className = 'task-toggle';
+            toggle.type = 'button';
+            toggle.textContent = hasDetails ? '+' : '';
+            toggle.disabled = !hasDetails;
+            summary.appendChild(toggle);
+
+            const nameWrap = document.createElement('div');
+            nameWrap.className = 'task-name-wrap task-summary-cell';
+            const taskName = document.createElement('div');
+            taskName.className = 'task-name';
+            taskName.textContent = task.filename;
+            nameWrap.appendChild(taskName);
+            if (task.sourceMessageLink) {
+                const sourceHint = document.createElement('div');
+                sourceHint.className = 'task-name-sub';
+                sourceHint.textContent = task.sourceMessageLink;
+                nameWrap.appendChild(sourceHint);
+            }
+            summary.appendChild(nameWrap);
+
+            const typeCell = document.createElement('div');
+            typeCell.className = 'task-summary-cell';
+            typeCell.textContent = task.type;
+            summary.appendChild(typeCell);
+
+            const statusCell = document.createElement('div');
+            statusCell.className = 'task-summary-cell';
+            const taskStatus = document.createElement('span');
+            taskStatus.className = `task-status status-${task.status}`;
+            taskStatus.textContent = task.status;
+            statusCell.appendChild(taskStatus);
+            summary.appendChild(statusCell);
+
+            const sizeCell = document.createElement('div');
+            sizeCell.className = 'task-summary-cell';
+            sizeCell.textContent = formatFileSize(task.size);
+            summary.appendChild(sizeCell);
+
+            const timeCell = document.createElement('div');
+            timeCell.className = 'task-summary-cell';
+            timeCell.textContent = task.downloadTime || '-';
+            summary.appendChild(timeCell);
+
+            const progressCell = document.createElement('div');
+            progressCell.className = 'task-progress';
+            progressCell.textContent = task.progress || '-';
+            if (task.status === 'downloading') {
+                const progressBarContainer = document.createElement('div');
+                progressBarContainer.className = 'progress-bar-container';
+                const progressBar = document.createElement('div');
+                progressBar.className = 'progress-bar';
+                progressBar.style.width = `${getProgressPercent(task)}%`;
+                progressBarContainer.appendChild(progressBar);
+                progressCell.appendChild(progressBarContainer);
+            }
+            summary.appendChild(progressCell);
+
+            const actions = createTaskActions(task);
+            summary.appendChild(actions);
+            taskElement.appendChild(summary);
+
+            if (hasDetails) {
+                const details = createTaskDetails(task);
+                details.style.display = 'none';
+                toggle.addEventListener('click', () => {
+                    const isOpen = details.style.display !== 'none';
+                    details.style.display = isOpen ? 'none' : 'flex';
+                    toggle.textContent = isOpen ? '+' : '-';
+                    toggle.classList.toggle('is-open', !isOpen);
+                });
+                taskElement.appendChild(details);
+            }
+
+            return taskElement;
+        }
+
         function renderTasks() {
             const taskList = document.getElementById('task-list');
+            const hasItems = totalItems > 0;
+            const startIndex = hasItems ? ((currentPage - 1) * itemsPerPage) + 1 : 0;
+            const endIndex = hasItems ? Math.min(currentPage * itemsPerPage, totalItems) : 0;
 
-            // Calculate start and end indices for display
-            const startIndex = (currentPage - 1) * itemsPerPage + 1;
-            const endIndex = Math.min(currentPage * itemsPerPage, totalItems);
-
-            // Update showing info
             document.getElementById('showing-start').textContent = startIndex;
             document.getElementById('showing-end').textContent = endIndex;
             document.getElementById('total-items').textContent = totalItems;
 
-            // Clear current task list
             taskList.innerHTML = '';
 
-            // Add current tasks
             if (allTasks.length === 0) {
                 taskList.innerHTML = '<div class="empty-state">No matching tasks</div>';
             } else {
                 allTasks.forEach(task => {
-                    const taskElement = document.createElement('div');
-                    taskElement.className = 'task-item';
-
-                    // Extract progress percentage for progress bar
-                    let progressPercent = 0;
-                    if (task.status === 'downloading') {
-                        // Extract percentage from progress string (e.g., "50 % (100 / 200)")
-                        const percentMatch = task.progress.match(/(\d+(?:\.\d+)?) %/);
-                        if (percentMatch) {
-                            progressPercent = parseFloat(percentMatch[1]);
-                        }
-                    }
-
-                    // Create task HTML with progress bar for downloading tasks
-                    let progressBarHtml = '';
-                    if (task.status === 'downloading') {
-                        progressBarHtml = `
-                            <div class="progress-bar-container">
-                                <div class="progress-bar" style="width: ${progressPercent}%"></div>
-                            </div>
-                        `;
-                    }
-
-                    taskElement.innerHTML = `
-                        <div class="task-content" style="display: flex; gap: 15px;">
-                            <div class="task-thumbnail" style="flex-shrink: 0;">
-                                ${task.thumbnailPath ? 
-                                    `<img src="/api/thumbnail?task_id=${task.id}" alt="thumbnail" style="width: 60px; height: 60px; object-fit: cover; border-radius: 8px; background: rgba(255,255,255,0.1);">` :
-                                    `<div style="width: 60px; height: 60px; background: rgba(255,255,255,0.1); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 1.5rem;">📄</div>`
-                                }
-                            </div>
-                            <div class="task-info" style="flex: 1;">
-                                <div class="task-header">
-                                    <div class="task-name">${task.filename}</div>
-                                    <span class="task-status status-${task.status}">${task.status}</span>
-                                </div>
-                                <div class="task-meta">
-                                    <span>Type: ${task.type}</span>
-                                    <span>Size: ${formatFileSize(task.size)}</span>
-                                    <span>Download Time: ${task.downloadTime}</span>
-                                </div>
-                                <div class="task-progress">
-                                    ${task.progress}
-                                    ${progressBarHtml}
-                                </div>
-                            </div>
-                        </div>
-                        <div class="task-actions">
-                            <button class="task-btn download-btn" onclick="downloadFile('${task.id}', '${encodeURIComponent(task.filename)}')" ${task.status === 'downloading' ? 'disabled' : ''}>
-                                Download
-                            </button>
-                            <button class="task-btn rename-btn" onclick="renameFile('${task.id}', '${encodeURIComponent(task.filename)}')" ${task.status === 'downloading' || task.status === 'queued' ? 'disabled' : ''}>
-                                Rename
-                            </button>
-                            <button class="task-btn delete-btn" onclick="deleteFile('${task.id}', '${encodeURIComponent(task.filename)}')">
-                                Delete
-                            </button>
-                        </div>
-                    `;
-                    taskList.appendChild(taskElement);
+                    taskList.appendChild(createTaskCard(task));
                 });
             }
 
-            // Update pagination buttons
             updatePagination(totalPages);
         }
 
@@ -1050,6 +2218,44 @@
 
         // Event listeners
         document.addEventListener('DOMContentLoaded', () => {
+            if (authState.resend_available_in) {
+                startSendCodeCooldown(authState.resend_available_in);
+            }
+            renderTelegramUserPanel();
+            renderChannelPanel();
+            renderAuthPanel();
+
+            document.getElementById('retry-modal-cancel').addEventListener('click', closeRetryModal);
+            document.getElementById('retry-modal-confirm').addEventListener('click', confirmRetryModal);
+            document.getElementById('retry-modal').addEventListener('click', (event) => {
+                if (event.target.id === 'retry-modal') {
+                    closeRetryModal();
+                }
+            });
+            document.getElementById('retry-modal-input').addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    confirmRetryModal();
+                } else if (event.key === 'Escape') {
+                    closeRetryModal();
+                }
+            });
+            document.getElementById('action-modal-cancel').addEventListener('click', closeActionModal);
+            document.getElementById('action-modal-confirm').addEventListener('click', confirmActionModal);
+            document.getElementById('action-modal').addEventListener('click', (event) => {
+                if (event.target.id === 'action-modal') {
+                    closeActionModal();
+                }
+            });
+            document.getElementById('action-modal-input').addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    confirmActionModal();
+                } else if (event.key === 'Escape') {
+                    closeActionModal();
+                }
+            });
+
             // Apply filter button
             document.getElementById('apply-filter').addEventListener('click', applyFilters);
 
@@ -1090,87 +2296,96 @@
         });
 
         // Initial updates
+        refreshAuthStatus();
         updateStatusData();
         initializeTasks();
 
         // Download file function
         function downloadFile(taskId, filename) {
-            // Create a download link and trigger it
-            const downloadUrl = `/api/download?task_id=${taskId}&filename=${filename}`;
+            const downloadUrl = `/api/download?task_id=${encodeURIComponent(taskId)}&filename=${encodeURIComponent(filename)}`;
             const link = document.createElement('a');
             link.href = downloadUrl;
-            link.download = decodeURIComponent(filename);
+            link.download = filename;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
+            showToast(`Download started: ${filename}`);
         }
 
         // Delete file function with confirmation
-        function deleteFile(taskId, filename) {
-            // Show confirmation dialog
-            const confirmDelete = confirm(`Are you sure you want to delete "${decodeURIComponent(filename)}"? This action cannot be undone.`);
-
-            if (confirmDelete) {
-                // Send DELETE request to API
-                fetch(`/api/delete?task_id=${taskId}&filename=${filename}`, {
-                    method: 'DELETE'
-                })
-                    .then(response => {
-                        if (response.ok) {
-                            // Refresh tasks list after successful deletion
-                            initializeTasks();
-                            // Show success message
-                            alert('File deleted successfully');
-                        } else {
-                            // Show error message
-                            return response.json().then(data => {
-                                throw new Error(data.error || 'Failed to delete file');
-                            });
-                        }
-                    })
-                    .catch(error => {
+        function deleteFile(task) {
+            const shouldOfferFileDelete = task.status === 'completed' && Boolean(task.downloadPath);
+            openActionModal({
+                title: 'Delete File',
+                description: shouldOfferFileDelete
+                    ? `You can remove "${task.filename}" from disk as well, or keep the file and only delete this record.`
+                    : `This will remove "${task.filename}" from the task history.`,
+                confirmText: 'Delete',
+                option: shouldOfferFileDelete ? {
+                    checked: true,
+                    label: 'Also delete the downloaded file from disk',
+                } : null,
+                onConfirm: async (_unusedValue, deleteFileFromDisk) => {
+                    try {
+                        const query = new URLSearchParams({
+                            task_id: task.id,
+                            filename: task.filename,
+                            delete_file: shouldOfferFileDelete && deleteFileFromDisk ? '1' : '0',
+                        });
+                        await apiRequest(`/api/delete?${query.toString()}`, {
+                            method: 'DELETE'
+                        });
+                        closeActionModal();
+                        await initializeTasks();
+                        showToast(shouldOfferFileDelete && deleteFileFromDisk ? `Deleted file and record: ${task.filename}` : `Deleted record: ${task.filename}`);
+                    } catch (error) {
                         console.error('Error deleting file:', error);
-                        alert(`Failed to delete file: ${error.message}`);
-                    });
-            }
+                        showToast(`Failed to delete file: ${error.message}`, 'error');
+                    }
+                }
+            });
         }
 
-        // Rename file function
         function renameFile(taskId, filename) {
-            // Get current filename without URL encoding
-            const currentFilename = decodeURIComponent(filename);
+            openActionModal({
+                title: 'Rename File',
+                description: `Choose a new filename for "${filename}". Existing category and directory rules stay unchanged.`,
+                confirmText: 'Save Name',
+                input: {
+                    label: 'New filename',
+                    value: filename,
+                    placeholder: 'Enter a new filename',
+                    hint: 'Only the filename changes. The saved directory stays the same.',
+                },
+                onConfirm: async (rawValue) => {
+                    const newFilename = rawValue.trim();
+                    if (!newFilename) {
+                        showToast('Filename cannot be empty', 'error');
+                        return;
+                    }
+                    if (newFilename === filename) {
+                        closeActionModal();
+                        return;
+                    }
 
-            // Prompt user for new filename
-            const newFilename = prompt('Enter new filename:', currentFilename);
-
-            // Check if user entered a new filename and it's different from current
-            if (newFilename && newFilename.trim() && newFilename !== currentFilename) {
-                // Send POST request to API to rename file
-                fetch(`/api/rename?task_id=${taskId}&filename=${filename}&new_filename=${encodeURIComponent(newFilename)}`, {
-                    method: 'POST'
-                })
-                    .then(response => {
-                        if (response.ok) {
-                            // Refresh tasks list after successful renaming
-                            initializeTasks();
-                            // Show success message
-                            alert('File renamed successfully');
-                        } else {
-                            // Show error message
-                            return response.json().then(data => {
-                                throw new Error(data.error || 'Failed to rename file');
-                            });
-                        }
-                    })
-                    .catch(error => {
+                    try {
+                        await apiRequest(`/api/rename?task_id=${encodeURIComponent(taskId)}&new_filename=${encodeURIComponent(newFilename)}`, {
+                            method: 'POST'
+                        });
+                        closeActionModal();
+                        await initializeTasks();
+                        showToast(`Renamed successfully: ${newFilename}`);
+                    } catch (error) {
                         console.error('Error renaming file:', error);
-                        alert(`Failed to rename file: ${error.message}`);
-                    });
-            }
+                        showToast(`Failed to rename file: ${error.message}`, 'error');
+                    }
+                }
+            });
         }
 
         // Set intervals - reduce API calls frequency
         setInterval(updateStatusData, 30000); // Update status data every 30 seconds
+        setInterval(refreshAuthStatus, 15000);
         // setInterval(initializeTasks, 10000); // Update tasks every 10 seconds
     </script>
 </body>

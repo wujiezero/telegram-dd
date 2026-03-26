@@ -12,9 +12,9 @@ services:
       - TELEGRAM_DAEMON_SESSION_PATH=/session
       - TELEGRAM_DAEMON_WORKERS=2
       # Proxy configuration (uncomment and modify if needed)
-      - TELEGRAM_DAEMON_PROXY_HOST=x.x.x.x
-      - TELEGRAM_DAEMON_PROXY_PORT=7890
-      - TELEGRAM_DAEMON_PROXY_TYPE=socks5
+      #- TELEGRAM_DAEMON_PROXY_HOST=x.x.x.x
+      #- TELEGRAM_DAEMON_PROXY_PORT=7890
+      #- TELEGRAM_DAEMON_PROXY_TYPE=socks5
       # Proxy authentication (uncomment and modify if needed)
       #- TELEGRAM_DAEMON_PROXY_USERNAME=your_username
       #- TELEGRAM_DAEMON_PROXY_PASSWORD=your_password
