@@ -2561,6 +2561,15 @@
             return percentMatch ? parseFloat(percentMatch[1]) : 0;
         }
 
+        function isVideoTask(task) {
+            if (task.type === 'Videos') {
+                return true;
+            }
+
+            const filename = String(task.filename || '').toLowerCase();
+            return ['.mp4', '.webm', '.mov', '.m4v', '.ogv'].some(ext => filename.endsWith(ext));
+        }
+
         function createTaskThumbnail(task) {
             if (!task.thumbnailPath) {
                 return null;
@@ -2568,8 +2577,8 @@
 
             const thumbnailWrapper = document.createElement('div');
             thumbnailWrapper.className = 'task-thumbnail';
-            const isVideoTask = task.fileType === 'Videos';
-            thumbnailWrapper.title = isVideoTask ? 'Click to play' : 'Click to enlarge';
+            const videoTask = isVideoTask(task);
+            thumbnailWrapper.title = videoTask ? 'Click to play' : 'Click to enlarge';
 
             const thumbnail = document.createElement('img');
             const thumbnailSrc = `/api/thumbnail?task_id=${encodeURIComponent(task.id)}`;
@@ -2579,7 +2588,7 @@
             thumbnail.src = thumbnailSrc;
             thumbnail.alt = 'thumbnail';
             thumbnail.addEventListener('click', () => {
-                openMediaPreview(isVideoTask ? 'video' : 'image', isVideoTask ? videoPreviewSrc : previewSrc, task.filename || task.id || 'Preview');
+                openMediaPreview(videoTask ? 'video' : 'image', videoTask ? videoPreviewSrc : previewSrc, task.filename || task.id || 'Preview');
             });
             thumbnailWrapper.appendChild(thumbnail);
             return thumbnailWrapper;
@@ -2659,6 +2668,16 @@
             taskActions.dataset.label = 'Actions';
 
             if (!task.isRealTime) {
+                if (task.status === 'completed' && task.downloadPath && isVideoTask(task)) {
+                    const previewBtn = document.createElement('button');
+                    previewBtn.className = 'task-btn download-btn';
+                    previewBtn.textContent = 'Preview';
+                    previewBtn.addEventListener('click', () => {
+                        openMediaPreview('video', `/api/media-preview?task_id=${encodeURIComponent(task.id)}`, task.filename || task.id || 'Preview');
+                    });
+                    taskActions.appendChild(previewBtn);
+                }
+
                 const downloadBtn = document.createElement('button');
                 downloadBtn.className = 'task-btn download-btn';
                 downloadBtn.textContent = 'Download';
