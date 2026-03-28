@@ -14,7 +14,7 @@ import os.path
 import threading
 import sqlite3
 import glob
-from mimetypes import guess_extension
+from mimetypes import guess_extension, guess_type
 import socks
 from flask import Flask, jsonify, render_template_string, request, send_file
 from flask_socketio import SocketIO
@@ -1085,6 +1085,45 @@ def api_thumbnail():
         return send_file(thumbnail_path, mimetype='image/jpeg')
     except Exception as e:
         logger.error(f'API thumbnail error: {e}', exc_info=True)
+        return jsonify({'error': 'Internal server error'}), 500
+
+@app.route('/api/image-preview')
+def api_image_preview():
+    """Return the original image when available, otherwise fall back to the thumbnail."""
+    try:
+        task_id = request.args.get('task_id', type=str)
+        if not task_id:
+            return jsonify({'error': 'Missing task_id parameter'}), 400
+
+        actual_task_id = task_id.split('-')[-1]
+
+        local_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        local_cursor = local_conn.cursor()
+        local_cursor.execute('SELECT download_path, thumbnail_path FROM downloads WHERE id = ?', (actual_task_id,))
+        result = local_cursor.fetchone()
+        local_cursor.close()
+        local_conn.close()
+
+        if not result:
+            return jsonify({'error': 'Preview not found'}), 404
+
+        download_path, thumbnail_path = result
+
+        if download_path:
+            safe_download_path = ensure_existing_path_within(downloadFolder, download_path)
+            if os.path.exists(safe_download_path):
+                guessed_type, _ = guess_type(safe_download_path)
+                if guessed_type and guessed_type.startswith('image/'):
+                    return send_file(safe_download_path, mimetype=guessed_type)
+
+        if thumbnail_path:
+            safe_thumbnail_path = ensure_existing_path_within(downloadFolder, thumbnail_path)
+            if os.path.exists(safe_thumbnail_path):
+                return send_file(safe_thumbnail_path, mimetype='image/jpeg')
+
+        return jsonify({'error': 'Preview file not found'}), 404
+    except Exception as e:
+        logger.error(f'API image preview error: {e}', exc_info=True)
         return jsonify({'error': 'Internal server error'}), 500
 
 # Web Server Thread Function

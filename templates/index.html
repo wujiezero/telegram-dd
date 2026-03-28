@@ -192,6 +192,14 @@
             margin-bottom: 6px;
         }
 
+        .status-info-grid > .stat-card {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+            margin-bottom: 0;
+        }
+
         .proxy-info p,
         .telegram-user p,
         .auth-card p {
@@ -970,48 +978,71 @@
             }
 
             .task-item {
-                padding: 11px 12px;
+                padding: 10px 11px;
             }
 
             .task-row-summary {
-                grid-template-columns: 32px minmax(0, 1fr);
-                gap: 8px;
+                grid-template-columns: 32px minmax(0, 1fr) minmax(0, 1fr);
+                gap: 6px 10px;
                 align-items: flex-start;
             }
 
             .task-name-wrap {
-                grid-column: 2;
+                grid-column: 2 / 4;
             }
 
             .task-name {
-                font-size: 0.95rem;
-                line-height: 1.35;
+                font-size: 0.92rem;
+                line-height: 1.3;
             }
 
             .task-name-sub {
-                margin-top: 4px;
-                white-space: normal;
-                overflow: visible;
-                text-overflow: initial;
-                word-break: break-all;
+                margin-top: 3px;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                word-break: normal;
             }
 
             .task-row-summary>.task-summary-cell,
             .task-row-summary>.task-progress,
             .task-row-summary>.task-actions {
-                grid-column: 2;
                 min-width: 0;
-                padding-top: 4px;
+                padding-top: 2px;
             }
 
-            .task-row-summary>.task-summary-cell,
+            .task-meta-type,
+            .task-meta-size {
+                grid-column: 2;
+            }
+
+            .task-meta-status,
+            .task-meta-time {
+                grid-column: 3;
+            }
+
+            .task-meta-progress,
+            .task-row-summary > .task-actions {
+                grid-column: 2 / 4;
+            }
+
+            .task-row-summary>.task-summary-cell {
+                display: flex;
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 2px;
+                min-width: 0;
+                font-size: 0.82rem;
+                line-height: 1.35;
+            }
+
             .task-row-summary>.task-progress {
                 display: flex;
+                flex-direction: column;
                 align-items: flex-start;
-                justify-content: space-between;
-                gap: 12px;
+                gap: 2px;
                 font-size: 0.82rem;
-                line-height: 1.4;
+                line-height: 1.35;
                 white-space: normal;
             }
 
@@ -1019,41 +1050,33 @@
             .task-row-summary>.task-progress::before {
                 content: attr(data-label);
                 color: var(--text-secondary);
-                font-size: 0.72rem;
+                font-size: 0.68rem;
                 letter-spacing: 0.04em;
                 text-transform: uppercase;
-                flex: 0 0 72px;
-            }
-
-            .task-row-summary>.task-progress {
-                flex-direction: column;
-                gap: 6px;
-            }
-
-            .task-row-summary>.task-progress::before,
-            .task-row-summary>.task-actions::before {
-                flex-basis: auto;
+                opacity: 0.92;
             }
 
             .task-row-summary>.task-actions::before {
                 content: attr(data-label);
                 color: var(--text-secondary);
-                font-size: 0.72rem;
+                font-size: 0.68rem;
                 letter-spacing: 0.04em;
                 text-transform: uppercase;
+                margin-bottom: 2px;
             }
 
             .task-actions {
-                flex-direction: column;
-                gap: 8px;
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 6px;
                 justify-content: flex-start;
             }
 
             .task-btn {
                 width: 100%;
-                min-height: 42px;
-                padding: 10px 12px;
-                font-size: 0.95rem;
+                min-height: 38px;
+                padding: 8px 10px;
+                font-size: 0.88rem;
             }
 
             /* 分页器优化：垂直堆叠 */
@@ -1146,9 +1169,17 @@
                 padding: 8px 10px;
             }
 
-            .task-row-summary>.task-summary-cell::before,
-            .task-row-summary>.task-progress::before {
-                flex-basis: 64px;
+            .task-row-summary {
+                gap: 6px 8px;
+            }
+
+            .task-actions {
+                grid-template-columns: 1fr;
+            }
+
+            .task-btn {
+                min-height: 36px;
+                font-size: 0.85rem;
             }
         }
 
@@ -1159,6 +1190,37 @@
             font-style: italic;
         }
 
+        .task-section {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .task-section + .task-section {
+            margin-top: 10px;
+        }
+
+        .task-section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 2px 4px;
+        }
+
+        .task-section-title {
+            font-size: 0.78rem;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+        }
+
+        .task-section-count {
+            font-size: 0.72rem;
+            color: var(--text-secondary);
+        }
+
         /* Pagination */
         .pagination {
             margin-top: 12px;
@@ -1167,6 +1229,17 @@
             align-items: center;
             gap: 10px;
             font-size: 0.82rem;
+        }
+
+        .pagination-summary {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .pagination-active-summary {
+            color: var(--text-secondary);
+            font-size: 0.76rem;
         }
 
         .pagination button {
@@ -1373,9 +1446,12 @@
             </div>
 
             <div class="pagination">
-                <div>
-                    Showing <span id="showing-start">1</span> to <span id="showing-end">0</span> of <span
-                        id="total-items">0</span> items
+                <div class="pagination-summary">
+                    <div>
+                        History <span id="showing-start">1</span> to <span id="showing-end">0</span> of <span
+                            id="total-items">0</span> items
+                    </div>
+                    <div id="active-items-summary" class="pagination-active-summary"></div>
                 </div>
                 <div class="pagination-controls">
                     <button id="prev-page" disabled>Previous</button>
@@ -2026,7 +2102,8 @@
         // Pagination and Filtering
         let currentPage = 1;
         let itemsPerPage = 10;
-        let allTasks = [];
+        let realTimeTasksState = [];
+        let historicalTasksState = [];
         let totalItems = 0;
         let totalPages = 0;
         let currentFilters = {}; // Store current filters for auto-refresh
@@ -2137,11 +2214,6 @@
                     return !activeTaskKeys.has(`${task.status}:${task.filename}`);
                 });
 
-                const taskMap = new Map();
-                realTimeTasks.forEach(task => taskMap.set(`${task.filename}:${task.status}`, task));
-                historicalTasks.forEach(task => taskMap.set(task.id, task));
-                allTasks = Array.from(taskMap.values());
-
                 const realTimeTasksInFilter = realTimeTasks.filter(task => {
                     const matchesFilename = !effectiveFilters.filename ||
                         task.filename.toLowerCase().includes(effectiveFilters.filename.toLowerCase());
@@ -2152,8 +2224,10 @@
                     return matchesFilename && matchesFiletype && matchesStatus;
                 });
 
-                totalItems = historyData.total + realTimeTasksInFilter.length;
-                totalPages = Math.ceil(totalItems / itemsPerPage);
+                realTimeTasksState = realTimeTasksInFilter;
+                historicalTasksState = historicalTasks;
+                totalItems = historyData.total;
+                totalPages = historyData.pages || 0;
                 renderTasks();
             } catch (error) {
                 console.error('Failed to load tasks:', error);
@@ -2213,11 +2287,12 @@
 
             const thumbnail = document.createElement('img');
             const thumbnailSrc = `/api/thumbnail?task_id=${encodeURIComponent(task.id)}`;
+            const previewSrc = `/api/image-preview?task_id=${encodeURIComponent(task.id)}`;
             thumbnail.className = 'task-thumbnail-image';
             thumbnail.src = thumbnailSrc;
             thumbnail.alt = 'thumbnail';
             thumbnail.addEventListener('click', () => {
-                openImagePreview(thumbnailSrc, task.filename || task.id || 'Preview');
+                openImagePreview(previewSrc, task.filename || task.id || 'Preview');
             });
             thumbnailWrapper.appendChild(thumbnail);
             return thumbnailWrapper;
@@ -2360,13 +2435,13 @@
             summary.appendChild(nameWrap);
 
             const typeCell = document.createElement('div');
-            typeCell.className = 'task-summary-cell';
+            typeCell.className = 'task-summary-cell task-meta-type';
             typeCell.dataset.label = 'Type';
             typeCell.textContent = task.type;
             summary.appendChild(typeCell);
 
             const statusCell = document.createElement('div');
-            statusCell.className = 'task-summary-cell';
+            statusCell.className = 'task-summary-cell task-meta-status';
             statusCell.dataset.label = 'Status';
             const taskStatus = document.createElement('span');
             taskStatus.className = `task-status status-${task.status}`;
@@ -2375,19 +2450,19 @@
             summary.appendChild(statusCell);
 
             const sizeCell = document.createElement('div');
-            sizeCell.className = 'task-summary-cell';
+            sizeCell.className = 'task-summary-cell task-meta-size';
             sizeCell.dataset.label = 'Size';
             sizeCell.textContent = formatFileSize(task.size);
             summary.appendChild(sizeCell);
 
             const timeCell = document.createElement('div');
-            timeCell.className = 'task-summary-cell';
+            timeCell.className = 'task-summary-cell task-meta-time';
             timeCell.dataset.label = 'Time';
             timeCell.textContent = task.downloadTime || '-';
             summary.appendChild(timeCell);
 
             const progressCell = document.createElement('div');
-            progressCell.className = 'task-progress';
+            progressCell.className = 'task-progress task-meta-progress';
             progressCell.dataset.label = 'Progress';
             progressCell.textContent = task.progress || '-';
             if (task.status === 'downloading') {
@@ -2422,6 +2497,7 @@
 
         function renderTasks() {
             const taskList = document.getElementById('task-list');
+            const activeSummary = document.getElementById('active-items-summary');
             const hasItems = totalItems > 0;
             const startIndex = hasItems ? ((currentPage - 1) * itemsPerPage) + 1 : 0;
             const endIndex = hasItems ? Math.min(currentPage * itemsPerPage, totalItems) : 0;
@@ -2429,18 +2505,54 @@
             document.getElementById('showing-start').textContent = startIndex;
             document.getElementById('showing-end').textContent = endIndex;
             document.getElementById('total-items').textContent = totalItems;
+            activeSummary.textContent = realTimeTasksState.length > 0
+                ? `${realTimeTasksState.length} active item${realTimeTasksState.length === 1 ? '' : 's'} pinned to top`
+                : '';
 
             taskList.innerHTML = '';
 
-            if (allTasks.length === 0) {
+            if (realTimeTasksState.length === 0 && historicalTasksState.length === 0) {
                 taskList.innerHTML = '<div class="empty-state">No matching tasks</div>';
             } else {
-                allTasks.forEach(task => {
-                    taskList.appendChild(createTaskCard(task));
-                });
+                if (realTimeTasksState.length > 0) {
+                    const activeSection = document.createElement('section');
+                    activeSection.className = 'task-section';
+                    activeSection.appendChild(createTaskSectionHeader('Active Tasks', `${realTimeTasksState.length} item${realTimeTasksState.length === 1 ? '' : 's'}`));
+                    realTimeTasksState.forEach(task => {
+                        activeSection.appendChild(createTaskCard(task));
+                    });
+                    taskList.appendChild(activeSection);
+                }
+
+                if (historicalTasksState.length > 0) {
+                    const historySection = document.createElement('section');
+                    historySection.className = 'task-section';
+                    historySection.appendChild(createTaskSectionHeader('History', `${historicalTasksState.length} item${historicalTasksState.length === 1 ? '' : 's'} on this page`));
+                    historicalTasksState.forEach(task => {
+                        historySection.appendChild(createTaskCard(task));
+                    });
+                    taskList.appendChild(historySection);
+                }
             }
 
             updatePagination(totalPages);
+        }
+
+        function createTaskSectionHeader(title, countText) {
+            const header = document.createElement('div');
+            header.className = 'task-section-header';
+
+            const titleEl = document.createElement('div');
+            titleEl.className = 'task-section-title';
+            titleEl.textContent = title;
+            header.appendChild(titleEl);
+
+            const countEl = document.createElement('div');
+            countEl.className = 'task-section-count';
+            countEl.textContent = countText;
+            header.appendChild(countEl);
+
+            return header;
         }
 
         // Update pagination controls
