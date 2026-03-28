@@ -14,38 +14,40 @@
 
         :root {
             /* 保持深色背景但略微透明 */
-            --primary-bg: #07111f;
-            --secondary-bg: rgba(18, 28, 44, 0.5);
+            --primary-bg: #10224a;
+            --secondary-bg: rgba(196, 229, 244, 0.28);
             /* 关键：增加透明度 */
-            --card-bg: rgba(18, 28, 44, 0.34);
+            --card-bg: rgba(214, 239, 248, 0.2);
             /* 关键：增加透明度 */
             --text-primary: #ffffff;
-            --text-secondary: #b8c8df;
+            --text-secondary: rgba(234, 244, 255, 0.82);
             /* 稍微亮一点 */
-            --accent-blue: #58b8ff;
+            --accent-blue: #2f7cff;
             /* iOS 蓝色 */
-            --accent-green: #6ae27f;
+            --accent-green: #74dfde;
             /* iOS 绿色 */
-            --accent-yellow: #ffe27a;
-            --accent-pink: #ff8bd6;
-            --accent-cyan: #7de7ff;
+            --accent-yellow: #f7d97d;
+            --accent-pink: #c98dff;
+            --accent-cyan: #8ce8ff;
             /* iOS 黄色 */
-            --border-radius: 18px;
+            --border-radius: 26px;
             /* 稍微大一点的圆角 */
             /* 玻璃效果的关键 */
-            --glass-border: 1px solid rgba(255, 255, 255, 0.16);
-            --glass-shadow: 0 18px 48px rgba(4, 10, 24, 0.34);
-            --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.24);
-            --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            --glass-border: 1px solid rgba(255, 255, 255, 0.24);
+            --glass-shadow: 0 28px 70px rgba(18, 36, 85, 0.24);
+            --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.36), inset 0 -1px 0 rgba(255, 255, 255, 0.08);
+            --transition: all 0.34s cubic-bezier(0.2, 0.8, 0.2, 1);
         }
 
         body {
             /* 更流畅的背景，模拟液态的层次感 */
             background:
-                radial-gradient(circle at 14% 18%, rgba(125, 231, 255, 0.2), transparent 28%),
-                radial-gradient(circle at 84% 12%, rgba(255, 139, 214, 0.18), transparent 24%),
-                radial-gradient(circle at 72% 72%, rgba(88, 184, 255, 0.16), transparent 26%),
-                linear-gradient(145deg, #08111f 0%, #10182a 45%, #060b16 100%);
+                radial-gradient(circle at 18% 18%, rgba(255, 234, 174, 0.52), transparent 18%),
+                radial-gradient(circle at 84% 9%, rgba(130, 229, 255, 0.5), transparent 21%),
+                radial-gradient(circle at 14% 78%, rgba(47, 124, 255, 0.56), transparent 22%),
+                radial-gradient(circle at 74% 76%, rgba(31, 91, 255, 0.42), transparent 26%),
+                linear-gradient(128deg, rgba(243, 231, 208, 0.72) 0%, rgba(160, 213, 246, 0.48) 26%, rgba(33, 123, 255, 0.4) 52%, rgba(14, 48, 165, 0.78) 100%),
+                linear-gradient(160deg, #b7d9f1 0%, #4d89d3 32%, #2159cb 68%, #122d8d 100%);
             color: var(--text-primary);
             line-height: 1.45;
             padding: 14px;
@@ -65,49 +67,68 @@
             z-index: 1;
         }
 
+        .container::before {
+            content: "";
+            position: fixed;
+            inset: 18px;
+            border-radius: 34px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 26%),
+                linear-gradient(135deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01));
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.18),
+                inset 0 -1px 0 rgba(255, 255, 255, 0.05),
+                0 40px 120px rgba(9, 24, 67, 0.16);
+            pointer-events: none;
+            z-index: -1;
+        }
+
         body::before,
         body::after {
             content: "";
             position: fixed;
             border-radius: 999px;
             pointer-events: none;
-            filter: blur(60px);
-            opacity: 0.42;
+            filter: blur(80px);
+            opacity: 0.7;
             z-index: 0;
         }
 
         body::before {
-            top: -80px;
-            left: -60px;
-            width: 280px;
-            height: 280px;
-            background: rgba(88, 184, 255, 0.24);
+            top: 6%;
+            left: 48%;
+            width: 420px;
+            height: 260px;
+            transform: rotate(-26deg);
+            background: linear-gradient(135deg, rgba(255, 248, 210, 0.38), rgba(132, 230, 255, 0.22), rgba(65, 114, 255, 0.16));
         }
 
         body::after {
-            right: -80px;
-            bottom: 12%;
-            width: 320px;
-            height: 320px;
-            background: rgba(255, 139, 214, 0.18);
+            right: -8%;
+            bottom: -4%;
+            width: 460px;
+            height: 360px;
+            background: radial-gradient(circle, rgba(197, 146, 255, 0.22), rgba(98, 231, 255, 0.08) 58%, transparent 72%);
         }
 
         header {
             position: relative;
             background:
-                linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.04)),
+                radial-gradient(circle at top left, rgba(255, 255, 255, 0.44), transparent 42%),
+                linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.06)),
                 var(--secondary-bg);
             border-radius: var(--border-radius);
             /* Glassmorphism 核心属性 */
-            backdrop-filter: blur(20px) saturate(145%);
-            -webkit-backdrop-filter: blur(20px) saturate(145%);
-            box-shadow: var(--glass-shadow);
+            backdrop-filter: blur(32px) saturate(180%);
+            -webkit-backdrop-filter: blur(32px) saturate(180%);
+            box-shadow: var(--glass-shadow), var(--glass-highlight);
             border: var(--glass-border);
             overflow: hidden;
             /* ---------------------- */
             text-align: center;
             margin-bottom: 22px;
-            padding: 18px 22px;
+            padding: 22px 26px;
         }
 
         header::before {
@@ -115,21 +136,22 @@
             position: absolute;
             inset: 0;
             background:
-                linear-gradient(120deg, rgba(255, 255, 255, 0.14), transparent 34%),
-                radial-gradient(circle at top right, rgba(125, 231, 255, 0.18), transparent 34%);
+                linear-gradient(120deg, rgba(255, 255, 255, 0.36), transparent 30%),
+                radial-gradient(circle at top right, rgba(125, 231, 255, 0.2), transparent 34%),
+                radial-gradient(circle at bottom left, rgba(255, 213, 145, 0.16), transparent 26%);
             pointer-events: none;
         }
 
         h1 {
             position: relative;
-            font-size: 2.1rem;
-            font-weight: 700;
+            font-size: 2.18rem;
+            font-weight: 750;
             margin-bottom: 6px;
-            background: linear-gradient(135deg, #f6fbff 0%, var(--accent-cyan) 35%, var(--accent-blue) 68%, var(--accent-pink) 100%);
+            background: linear-gradient(135deg, #ffffff 0%, #eef9ff 28%, #d4f6ff 52%, #bbddff 72%, #ffffff 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
-            text-shadow: 0 0 28px rgba(125, 231, 255, 0.2);
+            text-shadow: 0 0 42px rgba(255, 255, 255, 0.18);
         }
 
         .subtitle {
@@ -159,13 +181,14 @@
         .task-item {
             position: relative;
             background:
-                linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.04)),
+                radial-gradient(circle at top left, rgba(255, 255, 255, 0.3), transparent 38%),
+                linear-gradient(180deg, rgba(255, 255, 255, 0.17), rgba(255, 255, 255, 0.05)),
                 var(--card-bg);
             border-radius: var(--border-radius);
             /* Glassmorphism 核心属性 */
-            backdrop-filter: blur(18px) saturate(150%);
-            -webkit-backdrop-filter: blur(18px) saturate(150%);
-            box-shadow: var(--glass-shadow);
+            backdrop-filter: blur(24px) saturate(180%);
+            -webkit-backdrop-filter: blur(24px) saturate(180%);
+            box-shadow: var(--glass-shadow), var(--glass-highlight);
             border: var(--glass-border);
             overflow: hidden;
             /* ---------------------- */
@@ -177,8 +200,8 @@
 
         /* 悬停效果 */
         .stat-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 20px 56px rgba(8, 19, 40, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+            transform: translateY(-5px) scale(1.004);
+            box-shadow: 0 28px 72px rgba(8, 24, 64, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.3), inset 0 -1px 0 rgba(255, 255, 255, 0.08);
         }
 
         .stat-card::before,
@@ -235,6 +258,7 @@
             padding: 12px;
             margin: 0;
             border-left: 4px solid;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
             /* 使用 accent 颜色 */
         }
 
@@ -292,11 +316,14 @@
 
         .auth-form input {
             width: 100%;
-            padding: 8px 10px;
-            border-radius: 8px;
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            background-color: rgba(255, 255, 255, 0.08);
+            padding: 10px 12px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.05)),
+                rgba(196, 229, 244, 0.14);
             color: var(--text-primary);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
         }
 
         .auth-actions {
@@ -306,12 +333,13 @@
         }
 
         .auth-btn {
-            padding: 7px 11px;
+            padding: 8px 13px;
             border: none;
-            border-radius: 8px;
+            border-radius: 999px;
             cursor: pointer;
             font-weight: 600;
             font-size: 0.85rem;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
         }
 
         .auth-btn:disabled {
@@ -320,12 +348,15 @@
         }
 
         .auth-btn-primary {
-            background-color: var(--accent-blue);
+            background: linear-gradient(135deg, #2f7cff, #7ab7ff);
             color: white;
+            box-shadow: 0 12px 28px rgba(47, 124, 255, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.22);
         }
 
         .auth-btn-secondary {
-            background-color: rgba(255, 255, 255, 0.12);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.06)),
+                rgba(214, 239, 248, 0.14);
             color: var(--text-primary);
         }
 
@@ -411,10 +442,15 @@
             max-width: 420px;
             padding: 24px 28px;
             text-align: center;
-            background-color: rgba(28, 28, 30, 0.82);
+            background:
+                radial-gradient(circle at top left, rgba(255, 255, 255, 0.24), transparent 38%),
+                linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.05)),
+                rgba(124, 181, 219, 0.2);
             border-radius: var(--border-radius);
-            box-shadow: var(--glass-shadow);
+            box-shadow: var(--glass-shadow), var(--glass-highlight);
             border: var(--glass-border);
+            backdrop-filter: blur(26px) saturate(170%);
+            -webkit-backdrop-filter: blur(26px) saturate(170%);
         }
 
         .screen-overlay-spinner {
@@ -452,11 +488,16 @@
 
         .modal-card {
             width: min(560px, 100%);
-            background: linear-gradient(180deg, rgba(34, 36, 44, 0.95), rgba(22, 24, 31, 0.92));
+            background:
+                radial-gradient(circle at top left, rgba(255, 255, 255, 0.28), transparent 40%),
+                linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.05)),
+                rgba(173, 220, 236, 0.18);
             border: var(--glass-border);
-            box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+            box-shadow: 0 30px 90px rgba(8, 24, 64, 0.32), var(--glass-highlight);
             border-radius: 22px;
             padding: 26px;
+            backdrop-filter: blur(28px) saturate(180%);
+            -webkit-backdrop-filter: blur(28px) saturate(180%);
         }
 
         .modal-title {
@@ -483,12 +524,15 @@
             width: 100%;
             padding: 14px 16px;
             border-radius: 14px;
-            border: 1px solid rgba(255, 255, 255, 0.14);
-            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.05)),
+                rgba(214, 239, 248, 0.12);
             color: var(--text-primary);
             font-size: 1rem;
             outline: none;
             transition: var(--transition);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
         }
 
         .modal-input:focus {
@@ -509,7 +553,9 @@
             margin-top: 14px;
             padding: 10px 12px;
             border-radius: 12px;
-            background: rgba(255, 255, 255, 0.05);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.04)),
+                rgba(214, 239, 248, 0.1);
             color: var(--text-secondary);
             font-size: 0.9rem;
         }
@@ -531,21 +577,24 @@
             min-width: 108px;
             padding: 11px 16px;
             border: none;
-            border-radius: 12px;
+            border-radius: 999px;
             cursor: pointer;
             font-weight: 600;
             transition: var(--transition);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
         }
 
         .modal-btn-secondary {
-            background: rgba(255, 255, 255, 0.1);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.06)),
+                rgba(214, 239, 248, 0.14);
             color: var(--text-primary);
         }
 
         .modal-btn-primary {
-            background: linear-gradient(135deg, var(--accent-blue), #41b0ff);
+            background: linear-gradient(135deg, #2f7cff, #8bd9ff);
             color: white;
-            box-shadow: 0 12px 30px rgba(10, 132, 255, 0.28);
+            box-shadow: 0 16px 36px rgba(47, 124, 255, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.24);
         }
 
         .modal-btn:hover {
@@ -569,15 +618,16 @@
             flex-wrap: wrap;
             gap: 10px;
             align-items: flex-end;
-            padding: 14px;
-            border-radius: calc(var(--border-radius) + 2px);
+            padding: 16px;
+            border-radius: calc(var(--border-radius) + 4px);
             background:
-                linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.03)),
-                rgba(16, 24, 38, 0.38);
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            box-shadow: 0 18px 44px rgba(5, 12, 28, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.18);
-            backdrop-filter: blur(18px) saturate(145%);
-            -webkit-backdrop-filter: blur(18px) saturate(145%);
+                radial-gradient(circle at top left, rgba(255, 255, 255, 0.24), transparent 42%),
+                linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.04)),
+                rgba(173, 220, 236, 0.18);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            box-shadow: 0 24px 56px rgba(8, 24, 64, 0.2), var(--glass-highlight);
+            backdrop-filter: blur(28px) saturate(180%);
+            -webkit-backdrop-filter: blur(28px) saturate(180%);
         }
 
         /* PC 端：调整按钮组的父容器，使其靠右对齐 */
@@ -603,32 +653,38 @@
         /* 增强表单元素，使其融入玻璃卡片 */
         .filter-group input,
         .filter-group select {
-            background-color: rgba(255, 255, 255, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.15);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.05)),
+                rgba(214, 239, 248, 0.14);
+            border: 1px solid rgba(255, 255, 255, 0.18);
             color: var(--text-primary);
-            padding: 7px 10px;
-            border-radius: 8px;
+            padding: 9px 12px;
+            border-radius: 14px;
             font-size: 0.9rem;
             min-width: 170px;
             -webkit-appearance: none;
             appearance: none;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
         }
 
         /* 统一所有 filter-controls 内部 button 的基本样式 */
         .filter-controls button {
-            padding: 7px 12px;
+            padding: 9px 16px;
             border: none;
-            border-radius: 8px;
+            border-radius: 999px;
             font-size: 0.88rem;
             font-weight: 600;
             cursor: pointer;
             transition: var(--transition);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2);
         }
 
         #reset-filter {
-            background-color: rgba(255, 255, 255, 0.1);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.06)),
+                rgba(214, 239, 248, 0.14);
             color: var(--text-primary);
-            border: 1px solid rgba(255, 255, 255, 0.15);
+            border: 1px solid rgba(255, 255, 255, 0.18);
         }
 
         #reset-filter:hover {
@@ -637,9 +693,9 @@
         }
 
         #apply-filter {
-            background: linear-gradient(135deg, #76e86f, #5fd5c8);
+            background: linear-gradient(135deg, #8fe0ff, #4f86ff 54%, #8f7dff);
             color: white;
-            box-shadow: 0 10px 24px rgba(95, 213, 200, 0.24);
+            box-shadow: 0 18px 36px rgba(65, 114, 255, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.24);
         }
 
         .task-table-header,
@@ -665,13 +721,13 @@
         }
 
         .task-item {
-            padding: 8px 10px;
-            border-left: 3px solid rgba(125, 231, 255, 0.72);
+            padding: 10px 12px;
+            border-left: 3px solid rgba(140, 232, 255, 0.9);
         }
 
         .task-item:hover {
-            transform: translateX(2px) translateY(-1px);
-            box-shadow: 0 18px 42px rgba(10, 24, 49, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.24);
+            transform: translateX(2px) translateY(-2px);
+            box-shadow: 0 28px 64px rgba(8, 24, 64, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.26), inset 0 -1px 0 rgba(255, 255, 255, 0.08);
         }
 
         .task-summary-cell {
@@ -705,13 +761,16 @@
         .task-toggle {
             width: 26px;
             height: 26px;
-            border-radius: 8px;
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            background: rgba(255, 255, 255, 0.06);
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.05)),
+                rgba(214, 239, 248, 0.14);
             color: var(--text-secondary);
             cursor: pointer;
             font-size: 0.8rem;
             line-height: 1;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
         }
 
         .task-toggle:disabled {
@@ -725,11 +784,12 @@
         }
 
         .task-status {
-            padding: 3px 8px;
+            padding: 5px 10px;
             border-radius: 999px;
             font-size: 0.74rem;
             font-weight: 600;
             white-space: nowrap;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
         }
 
         .status-downloading {
@@ -754,20 +814,24 @@
         }
 
         .progress-bar-container {
-            background-color: rgba(255, 255, 255, 0.09);
-            border-radius: 8px;
-            height: 6px;
-            margin-top: 3px;
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.04)),
+                rgba(12, 31, 77, 0.22);
+            border-radius: 999px;
+            height: 8px;
+            margin-top: 5px;
             overflow: hidden;
-            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
         }
 
         .progress-bar {
-            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-blue), var(--accent-green));
+            background:
+                linear-gradient(90deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0) 16%),
+                linear-gradient(90deg, #9cecff, #4d89ff 52%, #8a84ff 100%);
             height: 100%;
-            border-radius: 8px;
+            border-radius: 999px;
             transition: width 0.3s ease;
-            box-shadow: 0 0 18px rgba(125, 231, 255, 0.34);
+            box-shadow: 0 0 22px rgba(125, 231, 255, 0.4);
         }
 
         .task-actions {
@@ -778,9 +842,9 @@
         }
 
         .task-btn {
-            padding: 4px 8px;
+            padding: 6px 10px;
             border: none;
-            border-radius: 10px;
+            border-radius: 999px;
             font-size: 0.72rem;
             font-weight: 600;
             cursor: pointer;
@@ -788,26 +852,26 @@
             text-decoration: none;
             display: inline-block;
             text-align: center;
-            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
         }
 
         .download-btn {
-            background: linear-gradient(135deg, #4b90ff, #5abaff);
+            background: linear-gradient(135deg, #65baff, #4b6dff);
             color: white;
         }
 
         .delete-btn {
-            background: linear-gradient(135deg, #ff5d66, #ff7848);
+            background: linear-gradient(135deg, #ff727c, #ff8e6a);
             color: white;
         }
 
         .rename-btn {
-            background: linear-gradient(135deg, #ffb347, #ff9147);
+            background: linear-gradient(135deg, #ffd37c, #ffb255);
             color: white;
         }
 
         .retry-btn {
-            background: linear-gradient(135deg, #67d063, #54ddc8);
+            background: linear-gradient(135deg, #83ecff, #5dc9d5);
             color: white;
         }
 
@@ -1003,6 +1067,11 @@
         /* --- 响应式调整 (Mobile Optimization) --- */
 
         @media (max-width: 768px) {
+            .container::before {
+                inset: 8px;
+                border-radius: 24px;
+            }
+
             body {
                 padding: 10px;
                 padding-left: max(10px, env(safe-area-inset-left));
@@ -1292,19 +1361,22 @@
             align-items: center;
             justify-content: space-between;
             gap: 10px;
-            padding: 4px 6px;
-            border-radius: 14px;
-            background: linear-gradient(90deg, rgba(125, 231, 255, 0.08), rgba(255, 139, 214, 0.05));
-            border: 1px solid rgba(255, 255, 255, 0.08);
+            padding: 8px 12px;
+            border-radius: 18px;
+            background:
+                radial-gradient(circle at top left, rgba(255, 255, 255, 0.2), transparent 44%),
+                linear-gradient(90deg, rgba(143, 224, 255, 0.16), rgba(255, 255, 255, 0.06), rgba(201, 141, 255, 0.12));
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
         }
 
         .task-section-title {
-            font-size: 0.78rem;
+            font-size: 0.8rem;
             font-weight: 700;
-            letter-spacing: 0.08em;
+            letter-spacing: 0.12em;
             text-transform: uppercase;
-            color: #d8e7fb;
-            text-shadow: 0 0 18px rgba(125, 231, 255, 0.14);
+            color: #f3fbff;
+            text-shadow: 0 0 20px rgba(140, 232, 255, 0.2);
         }
 
         .task-section-count {
@@ -1320,13 +1392,16 @@
             align-items: center;
             gap: 10px;
             font-size: 0.82rem;
-            padding: 12px 14px;
-            border-radius: calc(var(--border-radius) - 2px);
+            padding: 14px 16px;
+            border-radius: calc(var(--border-radius) + 2px);
             background:
-                linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.03)),
-                rgba(14, 22, 34, 0.34);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            box-shadow: 0 16px 36px rgba(5, 12, 28, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+                radial-gradient(circle at top left, rgba(255, 255, 255, 0.22), transparent 40%),
+                linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.04)),
+                rgba(173, 220, 236, 0.16);
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            box-shadow: 0 24px 56px rgba(8, 24, 64, 0.2), var(--glass-highlight);
+            backdrop-filter: blur(26px) saturate(175%);
+            -webkit-backdrop-filter: blur(26px) saturate(175%);
         }
 
         .pagination-summary {
@@ -1341,14 +1416,17 @@
         }
 
         .pagination button {
-            padding: 5px 9px;
-            background-color: var(--card-bg);
+            padding: 8px 12px;
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.05)),
+                rgba(214, 239, 248, 0.14);
             color: var(--text-primary);
-            border: 1px solid var(--text-secondary);
-            border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            border-radius: 999px;
             font-size: 0.8rem;
             cursor: pointer;
             transition: var(--transition);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
         }
 
         .pagination button:disabled {
@@ -1361,10 +1439,10 @@
         }
 
         .pagination .page-btn.active {
-            background: linear-gradient(135deg, #6bdbff, #4b8bff);
+            background: linear-gradient(135deg, #92e5ff, #4f86ff 54%, #8f7dff);
             color: white;
             border: none;
-            box-shadow: 0 10px 22px rgba(75, 139, 255, 0.24);
+            box-shadow: 0 16px 34px rgba(79, 134, 255, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.24);
         }
 
         .pagination-controls {
