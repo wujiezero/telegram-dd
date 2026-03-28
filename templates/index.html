@@ -206,6 +206,13 @@
             overflow-wrap: break-word;
         }
 
+        .stat-subvalue {
+            margin-top: 6px;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            letter-spacing: 0.03em;
+        }
+
         /* Service Status Section 容器 (不使用 Glass 效果，由内部卡片承载) */
         .status-section {
             padding: 10px 4px;
@@ -562,7 +569,15 @@
             flex-wrap: wrap;
             gap: 10px;
             align-items: flex-end;
-            /* PC 端：确保过滤器和按钮底部对齐 */
+            padding: 14px;
+            border-radius: calc(var(--border-radius) + 2px);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.03)),
+                rgba(16, 24, 38, 0.38);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            box-shadow: 0 18px 44px rgba(5, 12, 28, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+            backdrop-filter: blur(18px) saturate(145%);
+            -webkit-backdrop-filter: blur(18px) saturate(145%);
         }
 
         /* PC 端：调整按钮组的父容器，使其靠右对齐 */
@@ -1278,6 +1293,9 @@
             justify-content: space-between;
             gap: 10px;
             padding: 4px 6px;
+            border-radius: 14px;
+            background: linear-gradient(90deg, rgba(125, 231, 255, 0.08), rgba(255, 139, 214, 0.05));
+            border: 1px solid rgba(255, 255, 255, 0.08);
         }
 
         .task-section-title {
@@ -1302,6 +1320,13 @@
             align-items: center;
             gap: 10px;
             font-size: 0.82rem;
+            padding: 12px 14px;
+            border-radius: calc(var(--border-radius) - 2px);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.03)),
+                rgba(14, 22, 34, 0.34);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 16px 36px rgba(5, 12, 28, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.16);
         }
 
         .pagination-summary {
@@ -1380,6 +1405,7 @@
             <div class="stat-card">
                 <div class="stat-label">Active Downloads</div>
                 <div class="stat-value" id="active-downloads">0</div>
+                <div class="stat-subvalue" id="active-download-speed">0.00 MB/s</div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">Queue Size</div>
@@ -2127,6 +2153,7 @@
             console.log('Status update received:', statusData);
             // Update the stats on the page
             document.getElementById('active-downloads').textContent = statusData.active_downloads;
+            document.getElementById('active-download-speed').textContent = `${Number(statusData.total_download_speed_mbps || 0).toFixed(2)} MB/s`;
             document.getElementById('queue-size').textContent = statusData.queue_size;
             document.getElementById('total-tasks').textContent = statusData.total_tasks;
             scheduleTasksRefresh(400);
@@ -2237,6 +2264,7 @@
             try {
                 const data = await apiRequest('/api/status');
                 document.getElementById('active-downloads').textContent = data.active_downloads;
+                document.getElementById('active-download-speed').textContent = `${Number(data.total_download_speed_mbps || 0).toFixed(2)} MB/s`;
                 document.getElementById('queue-size').textContent = data.queue_size;
                 document.getElementById('total-tasks').textContent = data.total_tasks;
                 telegramUser = data.telegram_user || null;

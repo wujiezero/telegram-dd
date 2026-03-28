@@ -494,12 +494,19 @@ def emit_status_update():
                 total_tasks = result[0][0]
         except Exception as e:
             logger.error(f'Error getting total tasks count: {e}', exc_info=True)
+
+        total_download_speed_mbps = 0.0
+        for task_info in web_in_progress.values():
+            speed_bps = task_info.get('speed_bps', 0.0)
+            if isinstance(speed_bps, (int, float)) and speed_bps > 0:
+                total_download_speed_mbps += speed_bps / (1024 * 1024)
         
         # Emit status update event
         socketio.emit('status_update', {
             'active_downloads': len(web_in_progress),
             'queue_size': len(web_queue_items),
-            'total_tasks': total_tasks
+            'total_tasks': total_tasks,
+            'total_download_speed_mbps': round(total_download_speed_mbps, 2),
         })
     except Exception as e:
         logger.error(f'Error emitting status update: {e}', exc_info=True)
@@ -650,10 +657,17 @@ def api_status():
             local_conn.close()
         except Exception as e:
             logger.error(f'Error getting total tasks count: {e}', exc_info=True)
+
+        total_download_speed_mbps = 0.0
+        for task_info in web_in_progress.values():
+            speed_bps = task_info.get('speed_bps', 0.0)
+            if isinstance(speed_bps, (int, float)) and speed_bps > 0:
+                total_download_speed_mbps += speed_bps / (1024 * 1024)
         
         return jsonify({
             'uptime': uptime,
             'active_downloads': len(web_in_progress),
+            'total_download_speed_mbps': round(total_download_speed_mbps, 2),
             'queue_size': len(web_queue_items),
             'version': TDD_VERSION,
             'channel_id': channel_id,
@@ -674,30 +688,14 @@ def api_tasks():
         tasks = []
         
         # Add active downloads
-        for filename, progress in web_in_progress.items():
-            # Get file size from database for active downloads
-            task_id = None
-            size = 0
-            source_message_link = ""
-            try:
-                local_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-                local_cursor = local_conn.cursor()
-                local_cursor.execute(
-                    'SELECT id, size, source_message_link FROM downloads WHERE filename = ? AND status = ? ORDER BY id DESC LIMIT 1',
-                    (filename, 'downloading')
-                )
-                result = local_cursor.fetchone()
-                if result:
-                    task_id = result[0]
-                    size = result[1]
-                    source_message_link = result[2] or ""
-                local_cursor.close()
-                local_conn.close()
-            except Exception as e:
-                logger.error(f'Error getting size for active download: {e}', exc_info=True)
-            
+        for task_id, task_info in web_in_progress.items():
+            filename = task_info.get('filename', 'unknown')
+            progress = task_info.get('progress', '0 % (0 / 0)')
+            size = task_info.get('size', 0)
+            source_message_link = task_info.get('source_message_link', '')
+
             tasks.append({
-                'task_id': task_id,
+                'task_id': str(task_id),
                 'filename': filename,
                 'status': 'downloading',
                 'progress': progress,
@@ -1519,14 +1517,14 @@ try:
             await auth_ready_event.wait()
         
         # 内部的 set_progress 函数，使用闭包访问状态
-        async def set_progress(filename, message, received, total):
+        async def set_progress(download_id, filename, message, received, total, size=0, source_message_link=""):
             nonlocal lastUpdate
             
             async with status_lock:
                 global web_in_progress
                 if received >= total:
                     try: 
-                        in_progress.pop(filename)
+                        in_progress.pop(str(download_id), None)
                         web_in_progress = in_progress
                     except: 
                         pass
@@ -1534,7 +1532,12 @@ try:
                 
                 percentage = math.trunc(received / total * 10000) / 100
                 progress_message = "{0} % ({1} / {2})".format(percentage, received, total)
-                in_progress[filename] = progress_message
+                in_progress[str(download_id)] = {
+                    'filename': filename,
+                    'progress': progress_message,
+                    'size': size,
+                    'source_message_link': source_message_link,
+                }
                 web_in_progress = in_progress
 
                 currentTime = time.time()
@@ -1735,7 +1738,14 @@ try:
                             logger.error(f"Error executing command 'list': {e}")
                     elif command == "status":
                         try:
-                            output = "".join([ "{0}: {1}\n".format(key,value) for (key, value) in in_progress.items()])
+                            output = "".join([
+                                "{0}: {1} - {2}\n".format(
+                                    key,
+                                    value.get('filename', 'unknown'),
+                                    value.get('progress', '')
+                                )
+                                for (key, value) in in_progress.items()
+                            ])
                             if output: 
                                 output = "Active downloads:\n\n" + output
                             else: 
@@ -1904,6 +1914,7 @@ try:
 
                     # 进度回调函数不能是异步的，所以我们需要使用一个同步的包装器
                     last_progress_time = [time.time()]
+                    last_speed_snapshot = [{'received': 0, 'timestamp': time.time()}]
                     def download_callback(received, total):
                         # 由于回调是同步的，我们不能直接await异步函数
                         # 但我们可以记录进度，然后在合适的时候更新
@@ -1911,9 +1922,25 @@ try:
                         percentage = math.trunc(received / total * 10000) / 100
                         progress_message = "{0} % ({1} / {2})".format(percentage, received, total)
                         last_progress_time[0] = time.time()
+
+                        previous_received = last_speed_snapshot[0]['received']
+                        previous_timestamp = last_speed_snapshot[0]['timestamp']
+                        elapsed_seconds = max(last_progress_time[0] - previous_timestamp, 0.001)
+                        bytes_delta = max(received - previous_received, 0)
+                        speed_bps = bytes_delta / elapsed_seconds
+                        last_speed_snapshot[0] = {
+                            'received': received,
+                            'timestamp': last_progress_time[0],
+                        }
                         
                         with sync_lock:
-                            in_progress[filename] = progress_message
+                            in_progress[str(download_id)] = {
+                                'filename': filename,
+                                'progress': progress_message,
+                                'size': size,
+                                'source_message_link': source_message_link,
+                                'speed_bps': speed_bps,
+                            }
                             # 确保全局变量同步
                             global web_in_progress
                             web_in_progress = in_progress
@@ -1998,7 +2025,7 @@ try:
 
                         await download_task
                         
-                        await set_progress(filename, message, 100, 100)
+                        await set_progress(download_id, filename, message, 100, 100, size=size, source_message_link=source_message_link)
                         move(build_safe_path(tempFolder, f"{filename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}"), download_path)
                     except asyncio.TimeoutError as e:
                         if download_task is not None and not download_task.done():
@@ -2043,6 +2070,11 @@ try:
                     # 捕获所有异常，确保任务不会永久卡住
                     error_msg = str(e)
                     logger.error(f"Download failed: {filename} - {error_msg}")
+                    with contextlib.suppress(Exception):
+                        with sync_lock:
+                            in_progress.pop(str(download_id), None)
+                            global web_in_progress
+                            web_in_progress = in_progress
                     
                     # 获取当前重试次数
                     current_retry = 0
