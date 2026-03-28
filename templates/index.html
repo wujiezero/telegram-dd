@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Telegram DD</title>
     <style>
         * {
@@ -42,6 +42,10 @@
             color: var(--text-primary);
             line-height: 1.45;
             padding: 14px;
+            padding-left: max(14px, env(safe-area-inset-left));
+            padding-right: max(14px, env(safe-area-inset-right));
+            padding-bottom: max(14px, env(safe-area-inset-bottom));
+            -webkit-text-size-adjust: 100%;
         }
 
         .container {
@@ -514,6 +518,8 @@
             border-radius: 8px;
             font-size: 0.9rem;
             min-width: 170px;
+            -webkit-appearance: none;
+            appearance: none;
         }
 
         /* 统一所有 filter-controls 内部 button 的基本样式 */
@@ -725,6 +731,7 @@
 
         .task-thumbnail-image {
             object-fit: cover;
+            cursor: zoom-in;
         }
 
         .task-thumbnail-placeholder {
@@ -774,6 +781,65 @@
             display: flex;
             align-items: center;
             gap: 8px;
+        }
+
+        .image-preview-backdrop {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            background: rgba(0, 0, 0, 0.82);
+            opacity: 0;
+            visibility: hidden;
+            transition: var(--transition);
+            z-index: 1100;
+        }
+
+        .image-preview-backdrop.is-visible {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .image-preview-card {
+            position: relative;
+            max-width: min(92vw, 1200px);
+            max-height: 88vh;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .image-preview-image {
+            max-width: 100%;
+            max-height: calc(88vh - 36px);
+            border-radius: 12px;
+            object-fit: contain;
+            background: rgba(255, 255, 255, 0.04);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+        }
+
+        .image-preview-caption {
+            color: rgba(255, 255, 255, 0.82);
+            font-size: 0.85rem;
+            text-align: center;
+            word-break: break-word;
+        }
+
+        .image-preview-close {
+            position: absolute;
+            top: -10px;
+            right: -10px;
+            width: 36px;
+            height: 36px;
+            border: none;
+            border-radius: 999px;
+            background: rgba(18, 18, 18, 0.78);
+            color: white;
+            font-size: 1.2rem;
+            line-height: 1;
+            cursor: pointer;
         }
 
         .task-empty-toggle {
@@ -844,10 +910,13 @@
         @media (max-width: 768px) {
             body {
                 padding: 10px;
+                padding-left: max(10px, env(safe-area-inset-left));
+                padding-right: max(10px, env(safe-area-inset-right));
+                padding-bottom: max(10px, env(safe-area-inset-bottom));
             }
 
             h1 {
-                font-size: 2rem;
+                font-size: 1.6rem;
             }
 
             /* 统计卡片在小屏上改为单列 */
@@ -892,7 +961,8 @@
             .filter-group select {
                 min-width: auto;
                 width: 100%;
-                padding: 8px 10px;
+                padding: 10px 12px;
+                font-size: 16px;
             }
 
             .task-table-header {
@@ -900,7 +970,7 @@
             }
 
             .task-item {
-                padding: 9px 10px;
+                padding: 11px 12px;
             }
 
             .task-row-summary {
@@ -909,37 +979,81 @@
                 align-items: flex-start;
             }
 
-            .task-summary-mobile {
-                display: grid;
-                gap: 6px;
+            .task-name-wrap {
+                grid-column: 2;
+            }
+
+            .task-name {
+                font-size: 0.95rem;
+                line-height: 1.35;
+            }
+
+            .task-name-sub {
+                margin-top: 4px;
+                white-space: normal;
+                overflow: visible;
+                text-overflow: initial;
+                word-break: break-all;
+            }
+
+            .task-row-summary>.task-summary-cell,
+            .task-row-summary>.task-progress,
+            .task-row-summary>.task-actions {
+                grid-column: 2;
                 min-width: 0;
+                padding-top: 4px;
             }
 
-            .task-summary-mobile-top {
+            .task-row-summary>.task-summary-cell,
+            .task-row-summary>.task-progress {
                 display: flex;
-                justify-content: space-between;
                 align-items: flex-start;
-                gap: 8px;
+                justify-content: space-between;
+                gap: 12px;
+                font-size: 0.82rem;
+                line-height: 1.4;
+                white-space: normal;
             }
 
-            .task-summary-mobile-meta {
-                display: flex;
-                flex-wrap: wrap;
-                gap: 4px 8px;
-                font-size: 0.7rem;
+            .task-row-summary>.task-summary-cell::before,
+            .task-row-summary>.task-progress::before {
+                content: attr(data-label);
                 color: var(--text-secondary);
+                font-size: 0.72rem;
+                letter-spacing: 0.04em;
+                text-transform: uppercase;
+                flex: 0 0 72px;
+            }
+
+            .task-row-summary>.task-progress {
+                flex-direction: column;
+                gap: 6px;
+            }
+
+            .task-row-summary>.task-progress::before,
+            .task-row-summary>.task-actions::before {
+                flex-basis: auto;
+            }
+
+            .task-row-summary>.task-actions::before {
+                content: attr(data-label);
+                color: var(--text-secondary);
+                font-size: 0.72rem;
+                letter-spacing: 0.04em;
+                text-transform: uppercase;
             }
 
             .task-actions {
                 flex-direction: column;
-                gap: 5px;
+                gap: 8px;
                 justify-content: flex-start;
             }
 
             .task-btn {
                 width: 100%;
-                padding: 8px 10px;
-                font-size: 0.9rem;
+                min-height: 42px;
+                padding: 10px 12px;
+                font-size: 0.95rem;
             }
 
             /* 分页器优化：垂直堆叠 */
@@ -949,14 +1063,70 @@
                 align-items: stretch;
             }
 
+            .pagination-controls {
+                justify-content: space-between;
+            }
+
+            .page-buttons {
+                justify-content: center;
+            }
+
             .task-details {
                 padding-left: 0;
+                gap: 8px;
+            }
+
+            .task-detail-thumbnail {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+
+            .task-thumbnail-image,
+            .task-thumbnail-placeholder {
+                width: 44px;
+                height: 44px;
+                border-radius: 10px;
+            }
+
+            .screen-overlay-card,
+            .modal-card {
+                width: 100%;
+                min-width: 0;
+            }
+
+            .modal-card {
+                padding: 18px;
+                border-radius: 18px;
+            }
+
+            .modal-input,
+            .auth-form input {
+                font-size: 16px;
+            }
+
+            .modal-actions {
+                flex-direction: column-reverse;
+            }
+
+            .modal-btn {
+                width: 100%;
+                min-height: 44px;
+            }
+
+            .toast-container {
+                left: 10px;
+                right: 10px;
+                top: max(10px, env(safe-area-inset-top));
+            }
+
+            .toast {
+                min-width: 0;
             }
         }
 
         @media (max-width: 480px) {
             h1 {
-                font-size: 1.8rem;
+                font-size: 1.4rem;
             }
 
             .stat-value {
@@ -964,7 +1134,21 @@
             }
 
             h2 {
-                font-size: 1.2rem;
+                font-size: 1.05rem;
+            }
+
+            .pagination-controls {
+                gap: 8px;
+            }
+
+            .pagination button {
+                min-height: 40px;
+                padding: 8px 10px;
+            }
+
+            .task-row-summary>.task-summary-cell::before,
+            .task-row-summary>.task-progress::before {
+                flex-basis: 64px;
             }
         }
 
@@ -1009,6 +1193,27 @@
             background-color: var(--accent-blue);
             color: white;
             border: none;
+        }
+
+        .pagination-controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
+        .page-buttons {
+            display: flex;
+            gap: 5px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .pagination-ellipsis {
+            color: var(--text-secondary);
+            padding: 0 2px;
+            user-select: none;
         }
     </style>
 </head>
@@ -1172,10 +1377,9 @@
                     Showing <span id="showing-start">1</span> to <span id="showing-end">0</span> of <span
                         id="total-items">0</span> items
                 </div>
-                <div style="display: flex; gap: 10px; align-items: center;">
+                <div class="pagination-controls">
                     <button id="prev-page" disabled>Previous</button>
-                    <div id="page-buttons" style="display: flex; gap: 5px;">
-                        </div>
+                    <div id="page-buttons" class="page-buttons"></div>
                     <button id="next-page" disabled>Next</button>
                 </div>
             </div>
@@ -1219,6 +1423,13 @@
                 <button id="action-modal-cancel" class="modal-btn modal-btn-secondary" type="button">Cancel</button>
                 <button id="action-modal-confirm" class="modal-btn modal-btn-primary" type="button"></button>
             </div>
+        </div>
+    </div>
+    <div id="image-preview-modal" class="image-preview-backdrop" aria-hidden="true">
+        <div class="image-preview-card" role="dialog" aria-modal="true" aria-label="Image preview">
+            <button id="image-preview-close" class="image-preview-close" type="button" aria-label="Close preview">X</button>
+            <img id="image-preview-image" class="image-preview-image" alt="Preview">
+            <div id="image-preview-caption" class="image-preview-caption"></div>
         </div>
     </div>
 
@@ -1299,6 +1510,7 @@
         let overlayVisible = false;
         let retryModalState = null;
         let actionModalState = null;
+        let lastFocusedElement = null;
 
         function showScreenOverlay(message = 'Sending verification code...') {
             overlayVisible = true;
@@ -1449,6 +1661,39 @@
             modal.classList.remove('is-visible');
             modal.setAttribute('aria-hidden', 'true');
             actionModalState = null;
+        }
+
+        function openImagePreview(src, caption = '') {
+            const modal = document.getElementById('image-preview-modal');
+            const image = document.getElementById('image-preview-image');
+            const captionEl = document.getElementById('image-preview-caption');
+            const closeBtn = document.getElementById('image-preview-close');
+
+            lastFocusedElement = document.activeElement;
+            image.src = src;
+            image.alt = caption || 'Preview';
+            captionEl.textContent = caption;
+            modal.classList.add('is-visible');
+            modal.setAttribute('aria-hidden', 'false');
+            window.setTimeout(() => {
+                closeBtn.focus();
+            }, 0);
+        }
+
+        function closeImagePreview() {
+            const modal = document.getElementById('image-preview-modal');
+            const image = document.getElementById('image-preview-image');
+            const captionEl = document.getElementById('image-preview-caption');
+
+            modal.classList.remove('is-visible');
+            modal.setAttribute('aria-hidden', 'true');
+            image.removeAttribute('src');
+            captionEl.textContent = '';
+
+            if (lastFocusedElement && typeof lastFocusedElement.focus === 'function') {
+                lastFocusedElement.focus();
+            }
+            lastFocusedElement = null;
         }
 
         async function confirmActionModal() {
@@ -1964,11 +2209,16 @@
 
             const thumbnailWrapper = document.createElement('div');
             thumbnailWrapper.className = 'task-thumbnail';
+            thumbnailWrapper.title = 'Click to enlarge';
 
             const thumbnail = document.createElement('img');
+            const thumbnailSrc = `/api/thumbnail?task_id=${encodeURIComponent(task.id)}`;
             thumbnail.className = 'task-thumbnail-image';
-            thumbnail.src = `/api/thumbnail?task_id=${encodeURIComponent(task.id)}`;
+            thumbnail.src = thumbnailSrc;
             thumbnail.alt = 'thumbnail';
+            thumbnail.addEventListener('click', () => {
+                openImagePreview(thumbnailSrc, task.filename || task.id || 'Preview');
+            });
             thumbnailWrapper.appendChild(thumbnail);
             return thumbnailWrapper;
         }
@@ -2044,6 +2294,7 @@
         function createTaskActions(task) {
             const taskActions = document.createElement('div');
             taskActions.className = 'task-actions';
+            taskActions.dataset.label = 'Actions';
 
             if (!task.isRealTime) {
                 const downloadBtn = document.createElement('button');
@@ -2110,11 +2361,13 @@
 
             const typeCell = document.createElement('div');
             typeCell.className = 'task-summary-cell';
+            typeCell.dataset.label = 'Type';
             typeCell.textContent = task.type;
             summary.appendChild(typeCell);
 
             const statusCell = document.createElement('div');
             statusCell.className = 'task-summary-cell';
+            statusCell.dataset.label = 'Status';
             const taskStatus = document.createElement('span');
             taskStatus.className = `task-status status-${task.status}`;
             taskStatus.textContent = task.status;
@@ -2123,16 +2376,19 @@
 
             const sizeCell = document.createElement('div');
             sizeCell.className = 'task-summary-cell';
+            sizeCell.dataset.label = 'Size';
             sizeCell.textContent = formatFileSize(task.size);
             summary.appendChild(sizeCell);
 
             const timeCell = document.createElement('div');
             timeCell.className = 'task-summary-cell';
+            timeCell.dataset.label = 'Time';
             timeCell.textContent = task.downloadTime || '-';
             summary.appendChild(timeCell);
 
             const progressCell = document.createElement('div');
             progressCell.className = 'task-progress';
+            progressCell.dataset.label = 'Progress';
             progressCell.textContent = task.progress || '-';
             if (task.status === 'downloading') {
                 const progressBarContainer = document.createElement('div');
@@ -2196,12 +2452,21 @@
             // Clear existing page buttons
             pageBtnsContainer.innerHTML = '';
 
-            // Create page buttons
-            for (let i = 1; i <= totalPages; i++) {
+            const pagesToRender = getVisiblePageItems(totalPages, currentPage);
+
+            pagesToRender.forEach((page) => {
+                if (page === 'ellipsis') {
+                    const ellipsis = document.createElement('span');
+                    ellipsis.className = 'pagination-ellipsis';
+                    ellipsis.textContent = '...';
+                    pageBtnsContainer.appendChild(ellipsis);
+                    return;
+                }
+
                 const btn = document.createElement('button');
-                btn.className = `page-btn ${i === currentPage ? 'active' : ''}`;
-                btn.textContent = i;
-                btn.dataset.page = i;
+                btn.className = `page-btn ${page === currentPage ? 'active' : ''}`;
+                btn.textContent = page;
+                btn.dataset.page = page;
 
                 btn.addEventListener('click', () => {
                     currentPage = parseInt(btn.dataset.page);
@@ -2209,11 +2474,52 @@
                 });
 
                 pageBtnsContainer.appendChild(btn);
-            }
+            });
 
             // Update prev/next buttons
             prevBtn.disabled = currentPage === 1;
             nextBtn.disabled = currentPage === totalPages || totalPages === 0;
+        }
+
+        function getVisiblePageItems(totalPages, currentPage) {
+            if (totalPages <= 7) {
+                return Array.from({ length: totalPages }, (_, index) => index + 1);
+            }
+
+            const visiblePages = new Set([1, totalPages, currentPage]);
+
+            for (let page = currentPage - 1; page <= currentPage + 1; page++) {
+                if (page > 1 && page < totalPages) {
+                    visiblePages.add(page);
+                }
+            }
+
+            if (currentPage <= 3) {
+                visiblePages.add(2);
+                visiblePages.add(3);
+                visiblePages.add(4);
+            }
+
+            if (currentPage >= totalPages - 2) {
+                visiblePages.add(totalPages - 1);
+                visiblePages.add(totalPages - 2);
+                visiblePages.add(totalPages - 3);
+            }
+
+            const sortedPages = Array.from(visiblePages)
+                .filter((page) => page >= 1 && page <= totalPages)
+                .sort((a, b) => a - b);
+
+            const items = [];
+
+            sortedPages.forEach((page, index) => {
+                if (index > 0 && page - sortedPages[index - 1] > 1) {
+                    items.push('ellipsis');
+                }
+                items.push(page);
+            });
+
+            return items;
         }
 
         // Event listeners
@@ -2247,12 +2553,23 @@
                     closeActionModal();
                 }
             });
+            document.getElementById('image-preview-close').addEventListener('click', closeImagePreview);
+            document.getElementById('image-preview-modal').addEventListener('click', (event) => {
+                if (event.target.id === 'image-preview-modal') {
+                    closeImagePreview();
+                }
+            });
             document.getElementById('action-modal-input').addEventListener('keydown', (event) => {
                 if (event.key === 'Enter') {
                     event.preventDefault();
                     confirmActionModal();
                 } else if (event.key === 'Escape') {
                     closeActionModal();
+                }
+            });
+            document.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape' && document.getElementById('image-preview-modal').classList.contains('is-visible')) {
+                    closeImagePreview();
                 }
             });
 
