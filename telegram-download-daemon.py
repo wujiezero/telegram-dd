@@ -676,6 +676,7 @@ def api_tasks():
         # Add active downloads
         for filename, progress in web_in_progress.items():
             # Get file size from database for active downloads
+            task_id = None
             size = 0
             source_message_link = ""
             try:
@@ -687,6 +688,7 @@ def api_tasks():
                 )
                 result = local_cursor.fetchone()
                 if result:
+                    task_id = result[0]
                     size = result[1]
                     source_message_link = result[2] or ""
                 local_cursor.close()
@@ -695,6 +697,7 @@ def api_tasks():
                 logger.error(f'Error getting size for active download: {e}', exc_info=True)
             
             tasks.append({
+                'task_id': task_id,
                 'filename': filename,
                 'status': 'downloading',
                 'progress': progress,
@@ -1253,6 +1256,22 @@ def getFilename(message_or_event) -> str:
     
     return sanitize_filename(mediaFileName)
 
+def get_message_media_size(message_or_event) -> int:
+    message_obj = get_message_object(message_or_event)
+
+    if getattr(message_obj, 'document', None) and getattr(message_obj.document, 'size', None):
+        return int(message_obj.document.size)
+
+    if getattr(message_obj, 'photo', None):
+        largest_known_size = 0
+        for photo_size in getattr(message_obj.photo, 'sizes', []) or []:
+            candidate_size = getattr(photo_size, 'size', None)
+            if isinstance(candidate_size, int) and candidate_size > largest_known_size:
+                largest_known_size = candidate_size
+        return largest_known_size
+
+    return 0
+
 
 # 移除全局变量，将在 start 函数内部管理状态
 
@@ -1526,7 +1545,7 @@ try:
         async def persist_queued_download(message_obj, target_dir_override=None, existing_download_id=None, recovery_note=None):
             filename = getFilename(message_obj)
             file_category = getFileTypeCategory(filename)
-            size = 0 if getattr(message_obj, 'photo', None) else (message_obj.document.size if getattr(message_obj, 'document', None) else 0)
+            size = get_message_media_size(message_obj)
             source_channel = get_source_channel_id(message_obj)
             source_message_id = getattr(message_obj, 'id', None)
             source_message_link = build_message_link(message_obj)
@@ -1575,7 +1594,7 @@ try:
             filename = getFilename(message_obj)
             temp_path = build_safe_path(tempFolder, f"{filename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}")
             root_path = build_safe_path(downloadFolder, filename)
-            if (path.exists(temp_path) or path.exists(root_path)) and duplicates == "ignore":
+            if path.exists(temp_path) and duplicates == "ignore":
                 status_message = None if silent else await message_obj.reply("{0} already exists. Ignoring it.".format(filename))
                 logger.info(f"Ignoring duplicate file: {filename}")
                 return {'queued': False, 'filename': filename, 'message': status_message}
@@ -1793,12 +1812,36 @@ try:
                         os.makedirs(category_folder)
                         logger.info(f"Created category folder: {category_folder}")
 
+                    size = get_message_media_size(message_obj)
+                    if getattr(message_obj, 'photo', None):
+                       logger.info(f"Processing photo: {filename}, Estimated size: {size} bytes")
+                    else: 
+                       logger.info(f"Processing document: {filename}, Size: {size} bytes")
+
                     # Check for duplicates in the category folder
-                    temp_duplicate_path = build_safe_path(tempFolder, f"{tempfilename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}")
+                    in_progress_temp_path = build_safe_path(tempFolder, f"{filename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}")
                     final_duplicate_path = build_safe_path(category_folder, filename)
-                    if path.exists(temp_duplicate_path) or path.exists(final_duplicate_path):
-                        if duplicates == "rename":
-                           filename=tempfilename
+                    if path.exists(in_progress_temp_path) or path.exists(final_duplicate_path):
+                        should_rename_for_size_mismatch = path.exists(in_progress_temp_path)
+                        should_rename_for_unknown_size = False
+                        if path.exists(final_duplicate_path) and size > 0:
+                            try:
+                                existing_size = os.path.getsize(final_duplicate_path)
+                                should_rename_for_size_mismatch = existing_size != size
+                            except OSError:
+                                logger.warning(f"Unable to read existing file size for duplicate check: {final_duplicate_path}", exc_info=True)
+                                should_rename_for_unknown_size = True
+                        elif path.exists(final_duplicate_path):
+                            should_rename_for_unknown_size = True
+
+                        if should_rename_for_size_mismatch:
+                           filename = tempfilename
+                           logger.info(f"Renamed file because an existing file with the same name has a different size: {filename}")
+                        elif should_rename_for_unknown_size:
+                           filename = tempfilename
+                           logger.info(f"Renamed file because duplicate size could not be compared reliably: {filename}")
+                        elif duplicates == "rename":
+                           filename = tempfilename
                            logger.info(f"Renamed file to avoid duplicate: {filename}")
                         elif duplicates == "ignore":
                            logger.info(f"Ignoring duplicate file: {filename}")
@@ -1815,13 +1858,6 @@ try:
                                    conn.commit()
                            worker_queue.task_done()
                            continue
-
-                    if getattr(message_obj, 'photo', None):
-                       size = 0
-                       logger.info(f"Processing photo: {filename}")
-                    else: 
-                       size=message_obj.document.size
-                       logger.info(f"Processing document: {filename}, Size: {size} bytes")
 
                     # Update queued record into downloading state
                     download_path = build_safe_path(category_folder, filename)
@@ -1903,6 +1939,7 @@ try:
                         
                         # Send WebSocket notification for download progress
                         socketio.emit('download_progress', {
+                            'task_id': download_id,
                             'filename': filename,
                             'progress': percentage,
                             'received': received,

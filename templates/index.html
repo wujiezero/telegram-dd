@@ -14,31 +14,38 @@
 
         :root {
             /* 保持深色背景但略微透明 */
-            --primary-bg: #0d0d0d;
-            --secondary-bg: rgba(28, 28, 30, 0.6);
+            --primary-bg: #07111f;
+            --secondary-bg: rgba(18, 28, 44, 0.5);
             /* 关键：增加透明度 */
-            --card-bg: rgba(44, 44, 46, 0.4);
+            --card-bg: rgba(18, 28, 44, 0.34);
             /* 关键：增加透明度 */
             --text-primary: #ffffff;
-            --text-secondary: #c7c7cc;
+            --text-secondary: #b8c8df;
             /* 稍微亮一点 */
-            --accent-blue: #0a84ff;
+            --accent-blue: #58b8ff;
             /* iOS 蓝色 */
-            --accent-green: #30d158;
+            --accent-green: #6ae27f;
             /* iOS 绿色 */
-            --accent-yellow: #ffd60a;
+            --accent-yellow: #ffe27a;
+            --accent-pink: #ff8bd6;
+            --accent-cyan: #7de7ff;
             /* iOS 黄色 */
-            --border-radius: 14px;
+            --border-radius: 18px;
             /* 稍微大一点的圆角 */
             /* 玻璃效果的关键 */
-            --glass-border: 1px solid rgba(255, 255, 255, 0.18);
-            --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+            --glass-border: 1px solid rgba(255, 255, 255, 0.16);
+            --glass-shadow: 0 18px 48px rgba(4, 10, 24, 0.34);
+            --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.24);
             --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
         body {
             /* 更流畅的背景，模拟液态的层次感 */
-            background: radial-gradient(circle at top left, #2c3e50 0%, #0d0d0d 60%);
+            background:
+                radial-gradient(circle at 14% 18%, rgba(125, 231, 255, 0.2), transparent 28%),
+                radial-gradient(circle at 84% 12%, rgba(255, 139, 214, 0.18), transparent 24%),
+                radial-gradient(circle at 72% 72%, rgba(88, 184, 255, 0.16), transparent 26%),
+                linear-gradient(145deg, #08111f 0%, #10182a 45%, #060b16 100%);
             color: var(--text-primary);
             line-height: 1.45;
             padding: 14px;
@@ -46,38 +53,87 @@
             padding-right: max(14px, env(safe-area-inset-right));
             padding-bottom: max(14px, env(safe-area-inset-bottom));
             -webkit-text-size-adjust: 100%;
+            min-height: 100vh;
+            position: relative;
+            overflow-x: hidden;
         }
 
         .container {
             max-width: 1200px;
             margin: 0 auto;
+            position: relative;
+            z-index: 1;
+        }
+
+        body::before,
+        body::after {
+            content: "";
+            position: fixed;
+            border-radius: 999px;
+            pointer-events: none;
+            filter: blur(60px);
+            opacity: 0.42;
+            z-index: 0;
+        }
+
+        body::before {
+            top: -80px;
+            left: -60px;
+            width: 280px;
+            height: 280px;
+            background: rgba(88, 184, 255, 0.24);
+        }
+
+        body::after {
+            right: -80px;
+            bottom: 12%;
+            width: 320px;
+            height: 320px;
+            background: rgba(255, 139, 214, 0.18);
         }
 
         header {
-            background-color: var(--secondary-bg);
+            position: relative;
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.04)),
+                var(--secondary-bg);
             border-radius: var(--border-radius);
             /* Glassmorphism 核心属性 */
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
+            backdrop-filter: blur(20px) saturate(145%);
+            -webkit-backdrop-filter: blur(20px) saturate(145%);
             box-shadow: var(--glass-shadow);
             border: var(--glass-border);
+            overflow: hidden;
             /* ---------------------- */
             text-align: center;
             margin-bottom: 22px;
-            padding: 14px 18px;
+            padding: 18px 22px;
+        }
+
+        header::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background:
+                linear-gradient(120deg, rgba(255, 255, 255, 0.14), transparent 34%),
+                radial-gradient(circle at top right, rgba(125, 231, 255, 0.18), transparent 34%);
+            pointer-events: none;
         }
 
         h1 {
-            font-size: 2rem;
+            position: relative;
+            font-size: 2.1rem;
             font-weight: 700;
             margin-bottom: 6px;
-            background: linear-gradient(135deg, var(--accent-blue), var(--accent-green));
+            background: linear-gradient(135deg, #f6fbff 0%, var(--accent-cyan) 35%, var(--accent-blue) 68%, var(--accent-pink) 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
+            text-shadow: 0 0 28px rgba(125, 231, 255, 0.2);
         }
 
         .subtitle {
+            position: relative;
             color: var(--text-secondary);
             font-size: 0.95rem;
         }
@@ -101,13 +157,17 @@
         /* 统一卡片样式 */
         .stat-card,
         .task-item {
-            background-color: var(--card-bg);
+            position: relative;
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.04)),
+                var(--card-bg);
             border-radius: var(--border-radius);
             /* Glassmorphism 核心属性 */
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
+            backdrop-filter: blur(18px) saturate(150%);
+            -webkit-backdrop-filter: blur(18px) saturate(150%);
             box-shadow: var(--glass-shadow);
             border: var(--glass-border);
+            overflow: hidden;
             /* ---------------------- */
             transition: var(--transition);
             padding: 12px 14px;
@@ -118,7 +178,16 @@
         /* 悬停效果 */
         .stat-card:hover {
             transform: translateY(-4px);
-            box-shadow: 0 12px 32px 0 rgba(0, 0, 0, 0.5);
+            box-shadow: 0 20px 56px rgba(8, 19, 40, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+        }
+
+        .stat-card::before,
+        .task-item::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(125deg, rgba(255, 255, 255, 0.14), transparent 36%, transparent 72%, rgba(125, 231, 255, 0.08));
+            pointer-events: none;
         }
 
         .stat-label {
@@ -553,9 +622,9 @@
         }
 
         #apply-filter {
-            background-color: var(--accent-green);
+            background: linear-gradient(135deg, #76e86f, #5fd5c8);
             color: white;
-            box-shadow: 0 4px 6px rgba(52, 199, 89, 0.4);
+            box-shadow: 0 10px 24px rgba(95, 213, 200, 0.24);
         }
 
         .task-table-header,
@@ -582,12 +651,12 @@
 
         .task-item {
             padding: 8px 10px;
-            border-left: 3px solid var(--accent-blue);
+            border-left: 3px solid rgba(125, 231, 255, 0.72);
         }
 
         .task-item:hover {
-            transform: translateX(2px);
-            box-shadow: var(--glass-shadow);
+            transform: translateX(2px) translateY(-1px);
+            box-shadow: 0 18px 42px rgba(10, 24, 49, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.24);
         }
 
         .task-summary-cell {
@@ -670,18 +739,20 @@
         }
 
         .progress-bar-container {
-            background-color: rgba(255, 255, 255, 0.1);
+            background-color: rgba(255, 255, 255, 0.09);
             border-radius: 8px;
-            height: 4px;
+            height: 6px;
             margin-top: 3px;
             overflow: hidden;
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
         }
 
         .progress-bar {
-            background-color: var(--accent-green);
+            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-blue), var(--accent-green));
             height: 100%;
             border-radius: 8px;
             transition: width 0.3s ease;
+            box-shadow: 0 0 18px rgba(125, 231, 255, 0.34);
         }
 
         .task-actions {
@@ -694,7 +765,7 @@
         .task-btn {
             padding: 4px 8px;
             border: none;
-            border-radius: 6px;
+            border-radius: 10px;
             font-size: 0.72rem;
             font-weight: 600;
             cursor: pointer;
@@ -702,25 +773,26 @@
             text-decoration: none;
             display: inline-block;
             text-align: center;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
         }
 
         .download-btn {
-            background-color: var(--accent-blue);
+            background: linear-gradient(135deg, #4b90ff, #5abaff);
             color: white;
         }
 
         .delete-btn {
-            background-color: #ff3b30;
+            background: linear-gradient(135deg, #ff5d66, #ff7848);
             color: white;
         }
 
         .rename-btn {
-            background-color: #ff9500;
+            background: linear-gradient(135deg, #ffb347, #ff9147);
             color: white;
         }
 
         .retry-btn {
-            background-color: #30d158;
+            background: linear-gradient(135deg, #67d063, #54ddc8);
             color: white;
         }
 
@@ -1205,7 +1277,7 @@
             align-items: center;
             justify-content: space-between;
             gap: 10px;
-            padding: 2px 4px;
+            padding: 4px 6px;
         }
 
         .task-section-title {
@@ -1213,7 +1285,8 @@
             font-weight: 700;
             letter-spacing: 0.08em;
             text-transform: uppercase;
-            color: var(--text-secondary);
+            color: #d8e7fb;
+            text-shadow: 0 0 18px rgba(125, 231, 255, 0.14);
         }
 
         .task-section-count {
@@ -1263,9 +1336,10 @@
         }
 
         .pagination .page-btn.active {
-            background-color: var(--accent-blue);
+            background: linear-gradient(135deg, #6bdbff, #4b8bff);
             color: white;
             border: none;
+            box-shadow: 0 10px 22px rgba(75, 139, 255, 0.24);
         }
 
         .pagination-controls {
@@ -2035,7 +2109,7 @@
         socket.on('new_task', (task) => {
             console.log('New task received:', task);
             // Refresh tasks list to show new task
-            initializeTasks();
+            scheduleTasksRefresh();
         });
 
         // Handle download progress update
@@ -2043,6 +2117,9 @@
             console.log('Download progress update:', progressData);
             // Update progress bar for the specific task
             updateTaskProgress(progressData);
+            if (Number(progressData.progress) >= 100) {
+                scheduleTasksRefresh(500);
+            }
         });
 
         // Handle status update event for real-time stats
@@ -2052,31 +2129,44 @@
             document.getElementById('active-downloads').textContent = statusData.active_downloads;
             document.getElementById('queue-size').textContent = statusData.queue_size;
             document.getElementById('total-tasks').textContent = statusData.total_tasks;
+            scheduleTasksRefresh(400);
         });
 
         // Function to update task progress in the UI
         function updateTaskProgress(progressData) {
-            const taskItems = document.querySelectorAll('.task-item');
-            taskItems.forEach(item => {
-                const taskName = item.querySelector('.task-name').textContent;
-                if (taskName === progressData.filename) {
-                    const progressElement = item.querySelector('.task-progress');
-                    if (progressElement) {
-                        const progressText = `${progressData.progress}%`;
-                        const textNode = Array.from(progressElement.childNodes).find(node => node.nodeType === Node.TEXT_NODE);
-                        if (textNode) {
-                            textNode.textContent = progressText;
-                        } else {
-                            progressElement.insertBefore(document.createTextNode(progressText), progressElement.firstChild);
-                        }
-                    }
+            const taskId = progressData.task_id ? String(progressData.task_id) : '';
+            if (!taskId) {
+                return;
+            }
 
-                    const progressBar = item.querySelector('.progress-bar');
-                    if (progressBar) {
-                        progressBar.style.width = `${progressData.progress}%`;
-                    }
+            const nextProgress = Number(progressData.progress);
+            const previousProgress = liveProgressState.get(taskId);
+            if (Number.isFinite(previousProgress) && nextProgress < previousProgress) {
+                return;
+            }
+
+            liveProgressState.set(taskId, nextProgress);
+
+            const item = document.querySelector(`.task-item[data-task-id="${taskId}"]`);
+            if (!item) {
+                return;
+            }
+
+            const progressElement = item.querySelector('.task-progress');
+            if (progressElement) {
+                const progressText = `${nextProgress}%`;
+                const textNode = Array.from(progressElement.childNodes).find(node => node.nodeType === Node.TEXT_NODE);
+                if (textNode) {
+                    textNode.textContent = progressText;
+                } else {
+                    progressElement.insertBefore(document.createTextNode(progressText), progressElement.firstChild);
                 }
-            });
+            }
+
+            const progressBar = item.querySelector('.progress-bar');
+            if (progressBar) {
+                progressBar.style.width = `${nextProgress}%`;
+            }
         }
 
         // Function to get file type category
@@ -2107,6 +2197,18 @@
         let totalItems = 0;
         let totalPages = 0;
         let currentFilters = {}; // Store current filters for auto-refresh
+        const liveProgressState = new Map();
+        let taskRefreshTimer = null;
+
+        function scheduleTasksRefresh(delay = 250) {
+            if (taskRefreshTimer) {
+                window.clearTimeout(taskRefreshTimer);
+            }
+            taskRefreshTimer = window.setTimeout(() => {
+                taskRefreshTimer = null;
+                initializeTasks();
+            }, delay);
+        }
 
         // Initialize uptime tracking
         let startTime = null;
@@ -2159,7 +2261,8 @@
             try {
                 const tasksData = await apiRequest('/api/tasks');
                 const realTimeTasks = tasksData.tasks.map((task, index) => ({
-                    id: `real-${index}`,
+                    id: `real-${task.task_id || index}`,
+                    taskId: task.task_id ? String(task.task_id) : '',
                     filename: task.filename,
                     status: task.status,
                     type: getFileTypeCategory(task.filename),
@@ -2191,6 +2294,7 @@
                 const activeTaskKeys = new Set(realTimeTasks.map(task => `${task.status}:${task.filename}`));
                 const historicalTasks = historyData.history.map(task => ({
                     id: `history-${task.id}`,
+                    taskId: String(task.id),
                     filename: task.filename,
                     status: task.status,
                     type: task.file_type,
@@ -2222,6 +2326,16 @@
                     const matchesStatus = !effectiveFilters.status || effectiveFilters.status === 'all' ||
                         task.status === effectiveFilters.status;
                     return matchesFilename && matchesFiletype && matchesStatus;
+                });
+
+                realTimeTasksInFilter.forEach(task => {
+                    const progressValue = getProgressPercent(task);
+                    if (task.taskId && Number.isFinite(progressValue)) {
+                        const previousProgress = liveProgressState.get(task.taskId);
+                        if (!Number.isFinite(previousProgress) || progressValue >= previousProgress) {
+                            liveProgressState.set(task.taskId, progressValue);
+                        }
+                    }
                 });
 
                 realTimeTasksState = realTimeTasksInFilter;
@@ -2408,6 +2522,9 @@
         function createTaskCard(task) {
             const taskElement = document.createElement('div');
             taskElement.className = 'task-item';
+            if (task.taskId) {
+                taskElement.dataset.taskId = task.taskId;
+            }
 
             const summary = document.createElement('div');
             summary.className = 'task-row-summary';
