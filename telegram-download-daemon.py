@@ -1127,6 +1127,42 @@ def api_image_preview():
         logger.error(f'API image preview error: {e}', exc_info=True)
         return jsonify({'error': 'Internal server error'}), 500
 
+@app.route('/api/media-preview')
+def api_media_preview():
+    """Return the original image/video inline for lightweight browser preview."""
+    try:
+        task_id = request.args.get('task_id', type=str)
+        if not task_id:
+            return jsonify({'error': 'Missing task_id parameter'}), 400
+
+        actual_task_id = task_id.split('-')[-1]
+
+        local_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        local_cursor = local_conn.cursor()
+        local_cursor.execute('SELECT download_path FROM downloads WHERE id = ?', (actual_task_id,))
+        result = local_cursor.fetchone()
+        local_cursor.close()
+        local_conn.close()
+
+        if not result or not result[0]:
+            return jsonify({'error': 'Preview not found'}), 404
+
+        file_path = ensure_existing_path_within(downloadFolder, result[0])
+        if not os.path.exists(file_path):
+            return jsonify({'error': 'Preview file not found'}), 404
+
+        guessed_type, _ = guess_type(file_path)
+        if not guessed_type or (not guessed_type.startswith('image/') and not guessed_type.startswith('video/')):
+            return jsonify({'error': 'Unsupported preview media type'}), 415
+
+        response = send_file(file_path, mimetype=guessed_type, as_attachment=False, conditional=True)
+        response.headers['Accept-Ranges'] = 'bytes'
+        response.headers['Cache-Control'] = 'public, max-age=3600'
+        return response
+    except Exception as e:
+        logger.error(f'API media preview error: {e}', exc_info=True)
+        return jsonify({'error': 'Internal server error'}), 500
+
 # Web Server Thread Function
 def run_web_server():
     logger.info("Starting web server on http://0.0.0.0:7373")

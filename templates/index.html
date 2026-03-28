@@ -33,6 +33,8 @@
             --border-radius: 28px;
             --panel-radius: 36px;
             --card-radius: 24px;
+            --panel-padding: 16px;
+            --header-inset: 28px;
             /* 稍微大一点的圆角 */
             /* 玻璃效果的关键 */
             --glass-border: 1px solid rgba(255, 255, 255, 0.14);
@@ -66,13 +68,14 @@
             max-width: 1200px;
             margin: 0 auto;
             position: relative;
+            padding: var(--panel-padding);
             z-index: 1;
         }
 
         .container::before {
             content: "";
-            position: fixed;
-            inset: 18px;
+            position: absolute;
+            inset: 0;
             border-radius: var(--panel-radius);
             border: 1px solid rgba(255, 255, 255, 0.08);
             background:
@@ -130,6 +133,8 @@
             /* ---------------------- */
             text-align: center;
             margin-bottom: 22px;
+            margin-left: var(--header-inset);
+            margin-right: var(--header-inset);
             padding: 22px 26px;
         }
 
@@ -997,6 +1002,20 @@
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
         }
 
+        .image-preview-video {
+            width: min(92vw, 1100px);
+            max-width: 100%;
+            max-height: calc(88vh - 36px);
+            border-radius: 12px;
+            background: rgba(10, 14, 22, 0.92);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+        }
+
+        .image-preview-image[hidden],
+        .image-preview-video[hidden] {
+            display: none;
+        }
+
         .image-preview-caption {
             color: rgba(255, 255, 255, 0.82);
             font-size: 0.85rem;
@@ -1086,8 +1105,16 @@
 
         @media (max-width: 768px) {
             .container::before {
-                inset: 8px;
                 border-radius: 24px;
+            }
+
+            .container {
+                padding: 8px;
+            }
+
+            header {
+                margin-left: 8px;
+                margin-right: 8px;
             }
 
             body {
@@ -1701,6 +1728,7 @@
         <div class="image-preview-card" role="dialog" aria-modal="true" aria-label="Image preview">
             <button id="image-preview-close" class="image-preview-close" type="button" aria-label="Close preview">X</button>
             <img id="image-preview-image" class="image-preview-image" alt="Preview">
+            <video id="image-preview-video" class="image-preview-video" controls playsinline preload="metadata" hidden></video>
             <div id="image-preview-caption" class="image-preview-caption"></div>
         </div>
     </div>
@@ -1935,15 +1963,28 @@
             actionModalState = null;
         }
 
-        function openImagePreview(src, caption = '') {
+        function openMediaPreview(type, src, caption = '') {
             const modal = document.getElementById('image-preview-modal');
             const image = document.getElementById('image-preview-image');
+            const video = document.getElementById('image-preview-video');
             const captionEl = document.getElementById('image-preview-caption');
             const closeBtn = document.getElementById('image-preview-close');
 
             lastFocusedElement = document.activeElement;
-            image.src = src;
-            image.alt = caption || 'Preview';
+            if (type === 'video') {
+                image.hidden = true;
+                image.removeAttribute('src');
+                video.hidden = false;
+                video.src = src;
+                video.load();
+            } else {
+                video.pause();
+                video.hidden = true;
+                video.removeAttribute('src');
+                image.hidden = false;
+                image.src = src;
+                image.alt = caption || 'Preview';
+            }
             captionEl.textContent = caption;
             modal.classList.add('is-visible');
             modal.setAttribute('aria-hidden', 'false');
@@ -1955,11 +1996,17 @@
         function closeImagePreview() {
             const modal = document.getElementById('image-preview-modal');
             const image = document.getElementById('image-preview-image');
+            const video = document.getElementById('image-preview-video');
             const captionEl = document.getElementById('image-preview-caption');
 
             modal.classList.remove('is-visible');
             modal.setAttribute('aria-hidden', 'true');
             image.removeAttribute('src');
+            image.hidden = false;
+            video.pause();
+            video.removeAttribute('src');
+            video.load();
+            video.hidden = true;
             captionEl.textContent = '';
 
             if (lastFocusedElement && typeof lastFocusedElement.focus === 'function') {
@@ -2521,16 +2568,18 @@
 
             const thumbnailWrapper = document.createElement('div');
             thumbnailWrapper.className = 'task-thumbnail';
-            thumbnailWrapper.title = 'Click to enlarge';
+            const isVideoTask = task.fileType === 'Videos';
+            thumbnailWrapper.title = isVideoTask ? 'Click to play' : 'Click to enlarge';
 
             const thumbnail = document.createElement('img');
             const thumbnailSrc = `/api/thumbnail?task_id=${encodeURIComponent(task.id)}`;
             const previewSrc = `/api/image-preview?task_id=${encodeURIComponent(task.id)}`;
+            const videoPreviewSrc = `/api/media-preview?task_id=${encodeURIComponent(task.id)}`;
             thumbnail.className = 'task-thumbnail-image';
             thumbnail.src = thumbnailSrc;
             thumbnail.alt = 'thumbnail';
             thumbnail.addEventListener('click', () => {
-                openImagePreview(previewSrc, task.filename || task.id || 'Preview');
+                openMediaPreview(isVideoTask ? 'video' : 'image', isVideoTask ? videoPreviewSrc : previewSrc, task.filename || task.id || 'Preview');
             });
             thumbnailWrapper.appendChild(thumbnail);
             return thumbnailWrapper;
