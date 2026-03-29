@@ -25,12 +25,33 @@ from telethon import TelegramClient, events, __version__
 from telethon.tl.types import PeerChannel, DocumentAttributeFilename, DocumentAttributeVideo
 from telethon.errors import SessionPasswordNeededError
 import logging
+from logging.handlers import RotatingFileHandler
 
-# Set up logging
-logging.basicConfig(
-    format='[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s',
-    level=logging.INFO  # Set to INFO level for more detailed logs
-)
+LOG_FORMAT = '[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s'
+LOG_LEVEL_NAME = getenv("TELEGRAM_DAEMON_LOG_LEVEL", "INFO").upper()
+LOG_LEVEL = getattr(logging, LOG_LEVEL_NAME, logging.INFO)
+LOG_DIR = getenv("TELEGRAM_DAEMON_LOG_DIR", os.path.join(os.getcwd(), "logs"))
+LOG_FILE = getenv("TELEGRAM_DAEMON_LOG_FILE", "telegram-download-daemon.log")
+LOG_MAX_BYTES = int(getenv("TELEGRAM_DAEMON_LOG_MAX_BYTES", str(5 * 1024 * 1024)))
+LOG_BACKUP_COUNT = int(getenv("TELEGRAM_DAEMON_LOG_BACKUP_COUNT", "5"))
+
+os.makedirs(LOG_DIR, exist_ok=True)
+log_path = os.path.join(LOG_DIR, LOG_FILE)
+
+root_logger = logging.getLogger()
+root_logger.setLevel(LOG_LEVEL)
+root_logger.handlers.clear()
+
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+console_handler.setLevel(LOG_LEVEL)
+root_logger.addHandler(console_handler)
+
+file_handler = RotatingFileHandler(log_path, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding='utf-8')
+file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+file_handler.setLevel(LOG_LEVEL)
+root_logger.addHandler(file_handler)
+
 logger = logging.getLogger('telegram-download-daemon')
 
 import multiprocessing
@@ -67,6 +88,7 @@ TELEGRAM_DAEMON_START_TIMEOUT=int(getenv("TELEGRAM_DAEMON_START_TIMEOUT", "120")
 TELEGRAM_DAEMON_NO_PROGRESS_TIMEOUT=int(getenv("TELEGRAM_DAEMON_NO_PROGRESS_TIMEOUT", "300"))  # 无进度超时，默认5分钟
 TELEGRAM_DAEMON_MAX_RETRIES=int(getenv("TELEGRAM_DAEMON_MAX_RETRIES", "3"))  # 最大重试次数，默认3次
 TELEGRAM_DAEMON_NOTIFY_FAILURE=bool(int(getenv("TELEGRAM_DAEMON_NOTIFY_FAILURE", "1")))  # 失败通知，默认开启
+TELEGRAM_DAEMON_QUEUE_WARN_SECONDS=int(getenv("TELEGRAM_DAEMON_QUEUE_WARN_SECONDS", "120"))
 
 parser = argparse.ArgumentParser(
     description="Script to download files from a Telegram Channel.")
@@ -708,18 +730,23 @@ def api_tasks():
         for item in web_queue_items:
             event = item[0]
             filename = getFilename(event)
+            task_id = str(item[3]) if len(item) > 3 and item[3] is not None else ''
+            queued_at = item[4] if len(item) > 4 and isinstance(item[4], (int, float)) else None
             # Get file size from event
             size = 0
             if hasattr(event.media, 'document'):
                 size = event.media.document.size
             
             tasks.append({
+                'task_id': task_id,
                 'filename': filename,
                 'status': 'queued',
                 'progress': 'Waiting for download',
                 'downloadTime': None,
                 'size': size,
-                'source_message_link': build_message_link(event)
+                'source_message_link': build_message_link(event),
+                'queued_at': queued_at,
+                'queue_age_seconds': int(max(time.time() - queued_at, 0)) if queued_at else None
             })
         
         return jsonify({'tasks': tasks})
@@ -738,6 +765,8 @@ def api_history():
         filename = request.args.get('filename', None)
         file_type = request.args.get('file_type', None)
         status = request.args.get('status', None)
+        sort_by = request.args.get('sort_by', 'start_time', type=str)
+        sort_dir = request.args.get('sort_dir', 'desc', type=str)
         
         # Calculate offset
         offset = (page - 1) * per_page
@@ -771,13 +800,26 @@ def api_history():
         local_cursor.execute(count_query, params)
         total = local_cursor.fetchone()[0]
         
+        allowed_sort_columns = {
+            'time': 'start_time',
+            'start_time': 'start_time',
+            'size': 'size',
+            'status': 'status',
+            'name': 'filename',
+            'filename': 'filename',
+            'type': 'file_type',
+            'progress': 'progress'
+        }
+        sort_column = allowed_sort_columns.get((sort_by or 'start_time').lower(), 'start_time')
+        sort_direction = 'ASC' if (sort_dir or '').lower() == 'asc' else 'DESC'
+
         # Get historical downloads with filters
         select_query = f'''
         SELECT id, filename, file_type, status, size, progress, download_path, thumbnail_path, retry_count,
                source_channel_id, source_message_id, source_message_link, target_dir, start_time, end_time, error_message
         FROM downloads
         {where_clause}
-        ORDER BY start_time DESC
+        ORDER BY {sort_column} {sort_direction}, id DESC
         LIMIT ? OFFSET ?
         '''
         
@@ -817,7 +859,9 @@ def api_history():
             'total': total,
             'page': page,
             'per_page': per_page,
-            'pages': math.ceil(total / per_page)
+            'pages': math.ceil(total / per_page),
+            'sort_by': sort_column,
+            'sort_dir': sort_direction.lower()
         })
     except Exception as e:
         logger.error(f'API history error: {e}', exc_info=True)
@@ -1416,6 +1460,15 @@ try:
                 await target_queue.put(queue_item)
                 target_items.append(queue_item)
                 rebuild_web_queue_items()
+                logger.info(
+                    "Queued task id=%s filename=%s queue=%s sizes(photo=%s, video=%s, other=%s)",
+                    queue_item[3] if len(queue_item) > 3 else None,
+                    getFilename(queue_item[0]),
+                    queue_type,
+                    photo_queue.qsize(),
+                    video_queue.qsize(),
+                    other_queue.qsize()
+                )
             return queue_type
 
         async def pop_next_queue_item():
@@ -1438,6 +1491,15 @@ try:
                         queue_items_list_ref.remove(element)
                     rebuild_web_queue_items()
 
+                logger.info(
+                    "Dequeued task id=%s filename=%s queue=%s remaining(photo=%s, video=%s, other=%s)",
+                    element[3] if len(element) > 3 else None,
+                    getFilename(element[0]),
+                    queue_type,
+                    photo_queue.qsize(),
+                    video_queue.qsize(),
+                    other_queue.qsize()
+                )
                 return element, queue_ref, queue_items_list_ref, queue_type
             finally:
                 for pending_task in pending:
@@ -1645,7 +1707,7 @@ try:
                 recovery_note=recovery_note
             )
             status_message = None if silent else await message_obj.reply(notice_template.format(filename))
-            queue_item = [message_obj, status_message, target_dir_override, download_id]
+            queue_item = [message_obj, status_message, target_dir_override, download_id, time.time()]
             queue_type = await push_queue_item(queue_item)
 
             logger.info(f"Added file to queue: {filename}, type: {queue_type}")
@@ -1711,6 +1773,42 @@ try:
 
             if restored > 0:
                 logger.info(f"Restored {restored} pending downloads after restart")
+
+        async def monitor_queue_health():
+            warned_queue_ids = set()
+            while True:
+                try:
+                    await asyncio.sleep(30)
+                    now = time.time()
+                    stale_entries = []
+                    async with queue_lock:
+                        for item in list(queue_items):
+                            download_id = item[3] if len(item) > 3 else None
+                            queued_at = item[4] if len(item) > 4 and isinstance(item[4], (int, float)) else None
+                            if not download_id or not queued_at:
+                                continue
+                            queue_age = int(max(now - queued_at, 0))
+                            if queue_age >= TELEGRAM_DAEMON_QUEUE_WARN_SECONDS:
+                                stale_entries.append((str(download_id), getFilename(item[0]), queue_age))
+
+                    current_stale_ids = {entry[0] for entry in stale_entries}
+                    warned_queue_ids.intersection_update(current_stale_ids)
+                    for stale_id, stale_filename, queue_age in stale_entries:
+                        if stale_id in warned_queue_ids:
+                            continue
+                        logger.warning(
+                            "Queue task appears stalled id=%s filename=%s age=%ss active=%s queued=%s",
+                            stale_id,
+                            stale_filename,
+                            queue_age,
+                            len(in_progress),
+                            len(queue_items)
+                        )
+                        warned_queue_ids.add(stale_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as monitor_error:
+                    logger.error(f"Queue monitor error: {monitor_error}", exc_info=True)
 
         def schedule_retry(source_channel_id, source_message_id, target_dir_override=None):
             future = asyncio.run_coroutine_threadsafe(
@@ -2167,6 +2265,9 @@ try:
 
         dynamic_worker_count = max(1, int(worker_count))
         logger.info(f"Worker分配：动态共享worker={dynamic_worker_count}，按队列积压自动取图/视频/其他任务")
+
+        queue_monitor_task = loop.create_task(monitor_queue_health())
+        tasks.append(queue_monitor_task)
 
         for i in range(dynamic_worker_count):
             task = loop.create_task(worker(i + 1))

@@ -924,6 +924,16 @@
             font-size: 0.82rem;
         }
 
+        .task-thumbnail-placeholder.is-video {
+            cursor: pointer;
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.03)),
+                rgba(38, 50, 72, 0.72);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 0.85rem;
+        }
+
         .task-details {
             margin-top: 4px;
             display: flex;
@@ -1021,6 +1031,13 @@
             font-size: 0.85rem;
             text-align: center;
             word-break: break-word;
+        }
+
+        .image-preview-status {
+            min-height: 18px;
+            color: rgba(255, 255, 255, 0.72);
+            font-size: 0.82rem;
+            text-align: center;
         }
 
         .image-preview-close {
@@ -1391,6 +1408,31 @@
             font-style: italic;
         }
 
+        .loading-state {
+            display: grid;
+            gap: 10px;
+        }
+
+        .loading-card {
+            height: 78px;
+            border-radius: var(--card-radius);
+            background:
+                linear-gradient(110deg, rgba(255, 255, 255, 0.04) 8%, rgba(255, 255, 255, 0.12) 18%, rgba(255, 255, 255, 0.04) 33%),
+                rgba(61, 78, 108, 0.12);
+            background-size: 220% 100%;
+            animation: loading-shimmer 1.25s linear infinite;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        @keyframes loading-shimmer {
+            from {
+                background-position: 200% 0;
+            }
+            to {
+                background-position: -20% 0;
+            }
+        }
+
         .task-section {
             display: flex;
             flex-direction: column;
@@ -1648,6 +1690,20 @@
                     </select>
                 </div>
 
+                <div class="filter-group">
+                    <label>Sort by</label>
+                    <select id="sort-by">
+                        <option value="time:desc">Newest first</option>
+                        <option value="time:asc">Oldest first</option>
+                        <option value="size:desc">Largest first</option>
+                        <option value="size:asc">Smallest first</option>
+                        <option value="name:asc">Name A-Z</option>
+                        <option value="name:desc">Name Z-A</option>
+                        <option value="status:asc">Status A-Z</option>
+                        <option value="type:asc">Type A-Z</option>
+                    </select>
+                </div>
+
                 <div style="margin-left: auto; display: flex; gap: 10px; align-items: flex-end;">
                     <button id="reset-filter">Reset</button>
                     <button id="apply-filter">Apply</button>
@@ -1729,6 +1785,7 @@
             <button id="image-preview-close" class="image-preview-close" type="button" aria-label="Close preview">X</button>
             <img id="image-preview-image" class="image-preview-image" alt="Preview">
             <video id="image-preview-video" class="image-preview-video" controls playsinline preload="metadata" hidden></video>
+            <div id="image-preview-status" class="image-preview-status"></div>
             <div id="image-preview-caption" class="image-preview-caption"></div>
         </div>
     </div>
@@ -1968,19 +2025,33 @@
             const image = document.getElementById('image-preview-image');
             const video = document.getElementById('image-preview-video');
             const captionEl = document.getElementById('image-preview-caption');
+            const statusEl = document.getElementById('image-preview-status');
             const closeBtn = document.getElementById('image-preview-close');
 
             lastFocusedElement = document.activeElement;
+            statusEl.textContent = 'Loading preview...';
             if (type === 'video') {
                 image.hidden = true;
                 image.removeAttribute('src');
                 video.hidden = false;
+                video.onerror = () => {
+                    statusEl.textContent = 'This browser cannot play this video format. Use Download instead.';
+                };
+                video.onloadedmetadata = () => {
+                    statusEl.textContent = '';
+                };
                 video.src = src;
                 video.load();
             } else {
                 video.pause();
                 video.hidden = true;
                 video.removeAttribute('src');
+                image.onerror = () => {
+                    statusEl.textContent = 'Preview failed to load.';
+                };
+                image.onload = () => {
+                    statusEl.textContent = '';
+                };
                 image.hidden = false;
                 image.src = src;
                 image.alt = caption || 'Preview';
@@ -1998,15 +2069,21 @@
             const image = document.getElementById('image-preview-image');
             const video = document.getElementById('image-preview-video');
             const captionEl = document.getElementById('image-preview-caption');
+            const statusEl = document.getElementById('image-preview-status');
 
             modal.classList.remove('is-visible');
             modal.setAttribute('aria-hidden', 'true');
+            image.onerror = null;
+            image.onload = null;
             image.removeAttribute('src');
             image.hidden = false;
+            video.onerror = null;
+            video.onloadedmetadata = null;
             video.pause();
             video.removeAttribute('src');
             video.load();
             video.hidden = true;
+            statusEl.textContent = '';
             captionEl.textContent = '';
 
             if (lastFocusedElement && typeof lastFocusedElement.focus === 'function') {
@@ -2367,8 +2444,10 @@
         let totalItems = 0;
         let totalPages = 0;
         let currentFilters = {}; // Store current filters for auto-refresh
+        let currentSort = { by: 'time', dir: 'desc' };
         const liveProgressState = new Map();
         let taskRefreshTimer = null;
+        let tasksLoading = false;
 
         function scheduleTasksRefresh(delay = 250) {
             if (taskRefreshTimer) {
@@ -2429,6 +2508,8 @@
         // Initialize tasks data from API with optional filters
         async function initializeTasks(filters = {}) {
             const effectiveFilters = Object.keys(filters).length === 0 ? currentFilters : filters;
+            tasksLoading = true;
+            renderTasks();
             try {
                 const tasksData = await apiRequest('/api/tasks');
                 const realTimeTasks = tasksData.tasks.map((task, index) => ({
@@ -2457,12 +2538,13 @@
                 if (effectiveFilters.status && effectiveFilters.status !== 'all') {
                     queryString += `&status=${encodeURIComponent(effectiveFilters.status)}`;
                 }
+                queryString += `&sort_by=${encodeURIComponent(currentSort.by)}&sort_dir=${encodeURIComponent(currentSort.dir)}`;
 
                 const includeHistory = !['queued', 'downloading'].includes(effectiveFilters.status);
                 const historyData = includeHistory
                     ? await apiRequest(`/api/history${queryString}`)
                     : { history: [], total: 0, pages: 0 };
-                const activeTaskKeys = new Set(realTimeTasks.map(task => `${task.status}:${task.filename}`));
+                const activeTaskIds = new Set(realTimeTasks.map(task => task.taskId).filter(Boolean));
                 const historicalTasks = historyData.history.map(task => ({
                     id: `history-${task.id}`,
                     taskId: String(task.id),
@@ -2486,7 +2568,7 @@
                     if (!['queued', 'downloading'].includes(task.status)) {
                         return true;
                     }
-                    return !activeTaskKeys.has(`${task.status}:${task.filename}`);
+                    return !activeTaskIds.has(task.taskId);
                 });
 
                 const realTimeTasksInFilter = realTimeTasks.filter(task => {
@@ -2513,10 +2595,13 @@
                 historicalTasksState = historicalTasks;
                 totalItems = historyData.total;
                 totalPages = historyData.pages || 0;
+                tasksLoading = false;
                 renderTasks();
             } catch (error) {
+                tasksLoading = false;
                 console.error('Failed to load tasks:', error);
                 showToast(`Failed to load tasks: ${error.message}`, 'error');
+                renderTasks();
             }
         }
 
@@ -2529,6 +2614,9 @@
             const filetypeFilter = document.getElementById('filetype-filter').value;
             const statusFilter = document.getElementById('status-filter').value;
             itemsPerPage = parseInt(document.getElementById('items-per-page').value);
+            const sortValue = document.getElementById('sort-by').value || 'time:desc';
+            const [sortBy, sortDir] = sortValue.split(':');
+            currentSort = { by: sortBy || 'time', dir: sortDir || 'desc' };
 
             // Store current filters for auto-refresh
             currentFilters = {
@@ -2547,10 +2635,28 @@
             document.getElementById('filetype-filter').value = 'all';
             document.getElementById('status-filter').value = 'all';
             document.getElementById('items-per-page').value = '10';
+            document.getElementById('sort-by').value = 'time:desc';
             itemsPerPage = 10;
+            currentSort = { by: 'time', dir: 'desc' };
 
             currentFilters = {};
             initializeTasks();
+        }
+
+        function renderLoadingState() {
+            const taskList = document.getElementById('task-list');
+            taskList.innerHTML = '';
+
+            const loading = document.createElement('div');
+            loading.className = 'loading-state';
+
+            for (let index = 0; index < 4; index += 1) {
+                const card = document.createElement('div');
+                card.className = 'loading-card';
+                loading.appendChild(card);
+            }
+
+            taskList.appendChild(loading);
         }
 
         function getProgressPercent(task) {
@@ -2571,14 +2677,28 @@
         }
 
         function createTaskThumbnail(task) {
-            if (!task.thumbnailPath) {
+            const videoTask = isVideoTask(task);
+            const canPreviewVideo = !task.isRealTime && task.status === 'completed' && task.downloadPath && videoTask;
+            if (!task.thumbnailPath && !canPreviewVideo) {
                 return null;
             }
 
             const thumbnailWrapper = document.createElement('div');
             thumbnailWrapper.className = 'task-thumbnail';
-            const videoTask = isVideoTask(task);
             thumbnailWrapper.title = videoTask ? 'Click to play' : 'Click to enlarge';
+            const previewHandler = () => {
+                openMediaPreview(videoTask ? 'video' : 'image', videoTask ? `/api/media-preview?task_id=${encodeURIComponent(task.id)}` : `/api/image-preview?task_id=${encodeURIComponent(task.id)}`, task.filename || task.id || 'Preview');
+            };
+
+            if (!task.thumbnailPath && canPreviewVideo) {
+                const placeholder = document.createElement('button');
+                placeholder.type = 'button';
+                placeholder.className = 'task-thumbnail-placeholder is-video';
+                placeholder.textContent = '▶';
+                placeholder.addEventListener('click', previewHandler);
+                thumbnailWrapper.appendChild(placeholder);
+                return thumbnailWrapper;
+            }
 
             const thumbnail = document.createElement('img');
             const thumbnailSrc = `/api/thumbnail?task_id=${encodeURIComponent(task.id)}`;
@@ -2587,9 +2707,7 @@
             thumbnail.className = 'task-thumbnail-image';
             thumbnail.src = thumbnailSrc;
             thumbnail.alt = 'thumbnail';
-            thumbnail.addEventListener('click', () => {
-                openMediaPreview(videoTask ? 'video' : 'image', videoTask ? videoPreviewSrc : previewSrc, task.filename || task.id || 'Preview');
-            });
+            thumbnail.addEventListener('click', previewHandler);
             thumbnailWrapper.appendChild(thumbnail);
             return thumbnailWrapper;
         }
@@ -2659,7 +2777,7 @@
         }
 
         function taskHasDetails(task) {
-            return Boolean(task.thumbnailPath || task.sourceMessageLink || task.downloadPath || task.retryCount || task.errorMessage);
+            return Boolean(task.thumbnailPath || (isVideoTask(task) && task.downloadPath && task.status === 'completed') || task.sourceMessageLink || task.downloadPath || task.retryCount || task.errorMessage);
         }
 
         function createTaskActions(task) {
@@ -2679,18 +2797,20 @@
                 }
 
                 const downloadBtn = document.createElement('button');
-                downloadBtn.className = 'task-btn download-btn';
-                downloadBtn.textContent = 'Download';
-                downloadBtn.disabled = task.status !== 'completed' || !task.downloadPath;
-                downloadBtn.addEventListener('click', () => downloadFile(task.id, task.filename));
-                taskActions.appendChild(downloadBtn);
+                if (task.status === 'completed' && task.downloadPath) {
+                    downloadBtn.className = 'task-btn download-btn';
+                    downloadBtn.textContent = 'Download';
+                    downloadBtn.addEventListener('click', () => downloadFile(task.id, task.filename));
+                    taskActions.appendChild(downloadBtn);
+                }
 
-                const renameBtn = document.createElement('button');
-                renameBtn.className = 'task-btn rename-btn';
-                renameBtn.textContent = 'Rename';
-                renameBtn.disabled = task.status === 'downloading' || task.status === 'queued';
-                renameBtn.addEventListener('click', () => renameFile(task.id, task.filename));
-                taskActions.appendChild(renameBtn);
+                if (!['downloading', 'queued'].includes(task.status)) {
+                    const renameBtn = document.createElement('button');
+                    renameBtn.className = 'task-btn rename-btn';
+                    renameBtn.textContent = 'Rename';
+                    renameBtn.addEventListener('click', () => renameFile(task.id, task.filename));
+                    taskActions.appendChild(renameBtn);
+                }
 
                 const deleteBtn = document.createElement('button');
                 deleteBtn.className = 'task-btn delete-btn';
@@ -2698,11 +2818,10 @@
                 deleteBtn.addEventListener('click', () => deleteFile(task));
                 taskActions.appendChild(deleteBtn);
 
-                if (task.canRetry) {
+                if (task.canRetry && ['failed', 'interrupted'].includes(task.status)) {
                     const retryBtn = document.createElement('button');
                     retryBtn.className = 'task-btn retry-btn';
                     retryBtn.textContent = 'Retry';
-                    retryBtn.disabled = task.status === 'downloading' || task.status === 'queued';
                     retryBtn.addEventListener('click', () => openRetryModal(task));
                     taskActions.appendChild(retryBtn);
                 }
@@ -2819,6 +2938,12 @@
                 : '';
 
             taskList.innerHTML = '';
+
+            if (tasksLoading) {
+                renderLoadingState();
+                updatePagination(totalPages);
+                return;
+            }
 
             if (realTimeTasksState.length === 0 && historicalTasksState.length === 0) {
                 taskList.innerHTML = '<div class="empty-state">No matching tasks</div>';
@@ -2945,6 +3070,7 @@
 
         // Event listeners
         document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('sort-by').value = `${currentSort.by}:${currentSort.dir}`;
             if (authState.resend_available_in) {
                 startSendCodeCooldown(authState.resend_available_in);
             }
@@ -3031,6 +3157,7 @@
 
             // Items per page change
             document.getElementById('items-per-page').addEventListener('change', applyFilters);
+            document.getElementById('sort-by').addEventListener('change', applyFilters);
         });
 
         // Initial updates
