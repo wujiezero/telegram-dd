@@ -15,7 +15,7 @@ import socket
 import threading
 import sqlite3
 import glob
-from mimetypes import guess_extension
+from mimetypes import guess_extension, guess_type
 import socks
 from flask import Flask, jsonify, render_template_string, request, send_file
 from flask_socketio import SocketIO
@@ -34,12 +34,33 @@ from telethon import TelegramClient, events, __version__
 from telethon.tl.types import PeerChannel, DocumentAttributeFilename, DocumentAttributeVideo
 from telethon.errors import AuthKeyDuplicatedError, SessionPasswordNeededError
 import logging
+from logging.handlers import RotatingFileHandler
 
-# Set up logging
-logging.basicConfig(
-    format='[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s',
-    level=logging.INFO  # Set to INFO level for more detailed logs
-)
+LOG_FORMAT = '[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s'
+LOG_LEVEL_NAME = getenv("TELEGRAM_DAEMON_LOG_LEVEL", "INFO").upper()
+LOG_LEVEL = getattr(logging, LOG_LEVEL_NAME, logging.INFO)
+LOG_DIR = getenv("TELEGRAM_DAEMON_LOG_DIR", os.path.join(os.getcwd(), "logs"))
+LOG_FILE = getenv("TELEGRAM_DAEMON_LOG_FILE", "telegram-download-daemon.log")
+LOG_MAX_BYTES = int(getenv("TELEGRAM_DAEMON_LOG_MAX_BYTES", str(5 * 1024 * 1024)))
+LOG_BACKUP_COUNT = int(getenv("TELEGRAM_DAEMON_LOG_BACKUP_COUNT", "5"))
+
+os.makedirs(LOG_DIR, exist_ok=True)
+log_path = os.path.join(LOG_DIR, LOG_FILE)
+
+root_logger = logging.getLogger()
+root_logger.setLevel(LOG_LEVEL)
+root_logger.handlers.clear()
+
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+console_handler.setLevel(LOG_LEVEL)
+root_logger.addHandler(console_handler)
+
+file_handler = RotatingFileHandler(log_path, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding='utf-8')
+file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+file_handler.setLevel(LOG_LEVEL)
+root_logger.addHandler(file_handler)
+
 logger = logging.getLogger('telegram-download-daemon')
 
 import multiprocessing
@@ -77,6 +98,7 @@ TELEGRAM_DAEMON_START_TIMEOUT=int(getenv("TELEGRAM_DAEMON_START_TIMEOUT", "120")
 TELEGRAM_DAEMON_NO_PROGRESS_TIMEOUT=int(getenv("TELEGRAM_DAEMON_NO_PROGRESS_TIMEOUT", "300"))  # 无进度超时，默认5分钟
 TELEGRAM_DAEMON_MAX_RETRIES=int(getenv("TELEGRAM_DAEMON_MAX_RETRIES", "3"))  # 最大重试次数，默认3次
 TELEGRAM_DAEMON_NOTIFY_FAILURE=bool(int(getenv("TELEGRAM_DAEMON_NOTIFY_FAILURE", "1")))  # 失败通知，默认开启
+TELEGRAM_DAEMON_QUEUE_WARN_SECONDS=int(getenv("TELEGRAM_DAEMON_QUEUE_WARN_SECONDS", "120"))
 
 parser = argparse.ArgumentParser(
     description="Script to download files from a Telegram Channel.")
@@ -616,12 +638,19 @@ def emit_status_update():
                 total_tasks = result[0][0]
         except Exception as e:
             logger.error(f'Error getting total tasks count: {e}', exc_info=True)
+
+        total_download_speed_mbps = 0.0
+        for task_info in web_in_progress.values():
+            speed_bps = task_info.get('speed_bps', 0.0)
+            if isinstance(speed_bps, (int, float)) and speed_bps > 0:
+                total_download_speed_mbps += speed_bps / (1024 * 1024)
         
         # Emit status update event
         socketio.emit('status_update', {
             'active_downloads': len(web_in_progress),
             'queue_size': len(web_queue_items),
-            'total_tasks': total_tasks
+            'total_tasks': total_tasks,
+            'total_download_speed_mbps': round(total_download_speed_mbps, 2),
         })
     except Exception as e:
         logger.error(f'Error emitting status update: {e}', exc_info=True)
@@ -776,10 +805,17 @@ def api_status():
             local_conn.close()
         except Exception as e:
             logger.error(f'Error getting total tasks count: {e}', exc_info=True)
+
+        total_download_speed_mbps = 0.0
+        for task_info in web_in_progress.values():
+            speed_bps = task_info.get('speed_bps', 0.0)
+            if isinstance(speed_bps, (int, float)) and speed_bps > 0:
+                total_download_speed_mbps += speed_bps / (1024 * 1024)
         
         return jsonify({
             'uptime': uptime,
             'active_downloads': len(web_in_progress),
+            'total_download_speed_mbps': round(total_download_speed_mbps, 2),
             'queue_size': len(web_queue_items),
             'version': TDD_VERSION,
             'channel_id': channel_id,
@@ -800,27 +836,14 @@ def api_tasks():
         tasks = []
         
         # Add active downloads
-        for filename, progress in web_in_progress.items():
-            # Get file size from database for active downloads
-            size = 0
-            source_message_link = ""
-            try:
-                local_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-                local_cursor = local_conn.cursor()
-                local_cursor.execute(
-                    'SELECT id, size, source_message_link FROM downloads WHERE filename = ? AND status = ? ORDER BY id DESC LIMIT 1',
-                    (filename, 'downloading')
-                )
-                result = local_cursor.fetchone()
-                if result:
-                    size = result[1]
-                    source_message_link = result[2] or ""
-                local_cursor.close()
-                local_conn.close()
-            except Exception as e:
-                logger.error(f'Error getting size for active download: {e}', exc_info=True)
-            
+        for task_id, task_info in web_in_progress.items():
+            filename = task_info.get('filename', 'unknown')
+            progress = task_info.get('progress', '0 % (0 / 0)')
+            size = task_info.get('size', 0)
+            source_message_link = task_info.get('source_message_link', '')
+
             tasks.append({
+                'task_id': str(task_id),
                 'filename': filename,
                 'status': 'downloading',
                 'progress': progress,
@@ -833,18 +856,23 @@ def api_tasks():
         for item in web_queue_items:
             event = item[0]
             filename = getFilename(event)
+            task_id = str(item[3]) if len(item) > 3 and item[3] is not None else ''
+            queued_at = item[4] if len(item) > 4 and isinstance(item[4], (int, float)) else None
             # Get file size from event
             size = 0
             if hasattr(event.media, 'document'):
                 size = event.media.document.size
             
             tasks.append({
+                'task_id': task_id,
                 'filename': filename,
                 'status': 'queued',
                 'progress': 'Waiting for download',
                 'downloadTime': None,
                 'size': size,
-                'source_message_link': build_message_link(event)
+                'source_message_link': build_message_link(event),
+                'queued_at': queued_at,
+                'queue_age_seconds': int(max(time.time() - queued_at, 0)) if queued_at else None
             })
         
         return jsonify({'tasks': tasks})
@@ -863,6 +891,8 @@ def api_history():
         filename = request.args.get('filename', None)
         file_type = request.args.get('file_type', None)
         status = request.args.get('status', None)
+        sort_by = request.args.get('sort_by', 'start_time', type=str)
+        sort_dir = request.args.get('sort_dir', 'desc', type=str)
         
         # Calculate offset
         offset = (page - 1) * per_page
@@ -896,13 +926,26 @@ def api_history():
         local_cursor.execute(count_query, params)
         total = local_cursor.fetchone()[0]
         
+        allowed_sort_columns = {
+            'time': 'start_time',
+            'start_time': 'start_time',
+            'size': 'size',
+            'status': 'status',
+            'name': 'filename',
+            'filename': 'filename',
+            'type': 'file_type',
+            'progress': 'progress'
+        }
+        sort_column = allowed_sort_columns.get((sort_by or 'start_time').lower(), 'start_time')
+        sort_direction = 'ASC' if (sort_dir or '').lower() == 'asc' else 'DESC'
+
         # Get historical downloads with filters
         select_query = f'''
         SELECT id, filename, file_type, status, size, progress, download_path, thumbnail_path, retry_count,
                source_channel_id, source_message_id, source_message_link, target_dir, start_time, end_time, error_message
         FROM downloads
         {where_clause}
-        ORDER BY start_time DESC
+        ORDER BY {sort_column} {sort_direction}, id DESC
         LIMIT ? OFFSET ?
         '''
         
@@ -942,7 +985,9 @@ def api_history():
             'total': total,
             'page': page,
             'per_page': per_page,
-            'pages': math.ceil(total / per_page)
+            'pages': math.ceil(total / per_page),
+            'sort_by': sort_column,
+            'sort_dir': sort_direction.lower()
         })
     except Exception as e:
         logger.error(f'API history error: {e}', exc_info=True)
@@ -1213,6 +1258,81 @@ def api_thumbnail():
         logger.error(f'API thumbnail error: {e}', exc_info=True)
         return jsonify({'error': 'Internal server error'}), 500
 
+@app.route('/api/image-preview')
+def api_image_preview():
+    """Return the original image when available, otherwise fall back to the thumbnail."""
+    try:
+        task_id = request.args.get('task_id', type=str)
+        if not task_id:
+            return jsonify({'error': 'Missing task_id parameter'}), 400
+
+        actual_task_id = task_id.split('-')[-1]
+
+        local_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        local_cursor = local_conn.cursor()
+        local_cursor.execute('SELECT download_path, thumbnail_path FROM downloads WHERE id = ?', (actual_task_id,))
+        result = local_cursor.fetchone()
+        local_cursor.close()
+        local_conn.close()
+
+        if not result:
+            return jsonify({'error': 'Preview not found'}), 404
+
+        download_path, thumbnail_path = result
+
+        if download_path:
+            safe_download_path = ensure_existing_path_within(downloadFolder, download_path)
+            if os.path.exists(safe_download_path):
+                guessed_type, _ = guess_type(safe_download_path)
+                if guessed_type and guessed_type.startswith('image/'):
+                    return send_file(safe_download_path, mimetype=guessed_type)
+
+        if thumbnail_path:
+            safe_thumbnail_path = ensure_existing_path_within(downloadFolder, thumbnail_path)
+            if os.path.exists(safe_thumbnail_path):
+                return send_file(safe_thumbnail_path, mimetype='image/jpeg')
+
+        return jsonify({'error': 'Preview file not found'}), 404
+    except Exception as e:
+        logger.error(f'API image preview error: {e}', exc_info=True)
+        return jsonify({'error': 'Internal server error'}), 500
+
+@app.route('/api/media-preview')
+def api_media_preview():
+    """Return the original image/video inline for lightweight browser preview."""
+    try:
+        task_id = request.args.get('task_id', type=str)
+        if not task_id:
+            return jsonify({'error': 'Missing task_id parameter'}), 400
+
+        actual_task_id = task_id.split('-')[-1]
+
+        local_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        local_cursor = local_conn.cursor()
+        local_cursor.execute('SELECT download_path FROM downloads WHERE id = ?', (actual_task_id,))
+        result = local_cursor.fetchone()
+        local_cursor.close()
+        local_conn.close()
+
+        if not result or not result[0]:
+            return jsonify({'error': 'Preview not found'}), 404
+
+        file_path = ensure_existing_path_within(downloadFolder, result[0])
+        if not os.path.exists(file_path):
+            return jsonify({'error': 'Preview file not found'}), 404
+
+        guessed_type, _ = guess_type(file_path)
+        if not guessed_type or (not guessed_type.startswith('image/') and not guessed_type.startswith('video/')):
+            return jsonify({'error': 'Unsupported preview media type'}), 415
+
+        response = send_file(file_path, mimetype=guessed_type, as_attachment=False, conditional=True)
+        response.headers['Accept-Ranges'] = 'bytes'
+        response.headers['Cache-Control'] = 'public, max-age=3600'
+        return response
+    except Exception as e:
+        logger.error(f'API media preview error: {e}', exc_info=True)
+        return jsonify({'error': 'Internal server error'}), 500
+
 # Web Server Thread Function
 def run_web_server():
     logger.info("Starting web server on http://0.0.0.0:7373")
@@ -1377,6 +1497,22 @@ def getFilename(message_or_event) -> str:
     
     return sanitize_filename(mediaFileName)
 
+def get_message_media_size(message_or_event) -> int:
+    message_obj = get_message_object(message_or_event)
+
+    if getattr(message_obj, 'document', None) and getattr(message_obj.document, 'size', None):
+        return int(message_obj.document.size)
+
+    if getattr(message_obj, 'photo', None):
+        largest_known_size = 0
+        for photo_size in getattr(message_obj.photo, 'sizes', []) or []:
+            candidate_size = getattr(photo_size, 'size', None)
+            if isinstance(candidate_size, int) and candidate_size > largest_known_size:
+                largest_known_size = candidate_size
+        return largest_known_size
+
+    return 0
+
 
 # 移除全局变量，将在 start 函数内部管理状态
 
@@ -1494,6 +1630,15 @@ try:
                 await target_queue.put(queue_item)
                 target_items.append(queue_item)
                 rebuild_web_queue_items()
+                logger.info(
+                    "Queued task id=%s filename=%s queue=%s sizes(photo=%s, video=%s, other=%s)",
+                    queue_item[3] if len(queue_item) > 3 else None,
+                    getFilename(queue_item[0]),
+                    queue_type,
+                    photo_queue.qsize(),
+                    video_queue.qsize(),
+                    other_queue.qsize()
+                )
             return queue_type
 
         async def pop_next_queue_item():
@@ -1516,6 +1661,15 @@ try:
                         queue_items_list_ref.remove(element)
                     rebuild_web_queue_items()
 
+                logger.info(
+                    "Dequeued task id=%s filename=%s queue=%s remaining(photo=%s, video=%s, other=%s)",
+                    element[3] if len(element) > 3 else None,
+                    getFilename(element[0]),
+                    queue_type,
+                    photo_queue.qsize(),
+                    video_queue.qsize(),
+                    other_queue.qsize()
+                )
                 return element, queue_ref, queue_items_list_ref, queue_type
             finally:
                 for pending_task in pending:
@@ -1631,14 +1785,14 @@ try:
             await auth_ready_event.wait()
         
         # 内部的 set_progress 函数，使用闭包访问状态
-        async def set_progress(filename, message, received, total):
+        async def set_progress(download_id, filename, message, received, total, size=0, source_message_link=""):
             nonlocal lastUpdate
             
             async with status_lock:
                 global web_in_progress
                 if received >= total:
                     try: 
-                        in_progress.pop(filename)
+                        in_progress.pop(str(download_id), None)
                         web_in_progress = in_progress
                     except: 
                         pass
@@ -1646,7 +1800,12 @@ try:
                 
                 percentage = math.trunc(received / total * 10000) / 100
                 progress_message = "{0} % ({1} / {2})".format(percentage, received, total)
-                in_progress[filename] = progress_message
+                in_progress[str(download_id)] = {
+                    'filename': filename,
+                    'progress': progress_message,
+                    'size': size,
+                    'source_message_link': source_message_link,
+                }
                 web_in_progress = in_progress
 
                 currentTime = time.time()
@@ -1657,7 +1816,7 @@ try:
         async def persist_queued_download(message_obj, target_dir_override=None, existing_download_id=None, recovery_note=None):
             filename = getFilename(message_obj)
             file_category = getFileTypeCategory(filename)
-            size = 0 if getattr(message_obj, 'photo', None) else (message_obj.document.size if getattr(message_obj, 'document', None) else 0)
+            size = get_message_media_size(message_obj)
             source_channel = get_source_channel_id(message_obj)
             source_message_id = getattr(message_obj, 'id', None)
             source_message_link = build_message_link(message_obj)
@@ -1706,7 +1865,7 @@ try:
             filename = getFilename(message_obj)
             temp_path = build_safe_path(tempFolder, f"{filename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}")
             root_path = build_safe_path(downloadFolder, filename)
-            if (path.exists(temp_path) or path.exists(root_path)) and duplicates == "ignore":
+            if path.exists(temp_path) and duplicates == "ignore":
                 status_message = None if silent else await message_obj.reply("{0} already exists. Ignoring it.".format(filename))
                 logger.info(f"Ignoring duplicate file: {filename}")
                 return {'queued': False, 'filename': filename, 'message': status_message}
@@ -1718,7 +1877,7 @@ try:
                 recovery_note=recovery_note
             )
             status_message = None if silent else await message_obj.reply(notice_template.format(filename))
-            queue_item = [message_obj, status_message, target_dir_override, download_id]
+            queue_item = [message_obj, status_message, target_dir_override, download_id, time.time()]
             queue_type = await push_queue_item(queue_item)
 
             logger.info(f"Added file to queue: {filename}, type: {queue_type}")
@@ -1785,6 +1944,42 @@ try:
             if restored > 0:
                 logger.info(f"Restored {restored} pending downloads after restart")
 
+        async def monitor_queue_health():
+            warned_queue_ids = set()
+            while True:
+                try:
+                    await asyncio.sleep(30)
+                    now = time.time()
+                    stale_entries = []
+                    async with queue_lock:
+                        for item in list(queue_items):
+                            download_id = item[3] if len(item) > 3 else None
+                            queued_at = item[4] if len(item) > 4 and isinstance(item[4], (int, float)) else None
+                            if not download_id or not queued_at:
+                                continue
+                            queue_age = int(max(now - queued_at, 0))
+                            if queue_age >= TELEGRAM_DAEMON_QUEUE_WARN_SECONDS:
+                                stale_entries.append((str(download_id), getFilename(item[0]), queue_age))
+
+                    current_stale_ids = {entry[0] for entry in stale_entries}
+                    warned_queue_ids.intersection_update(current_stale_ids)
+                    for stale_id, stale_filename, queue_age in stale_entries:
+                        if stale_id in warned_queue_ids:
+                            continue
+                        logger.warning(
+                            "Queue task appears stalled id=%s filename=%s age=%ss active=%s queued=%s",
+                            stale_id,
+                            stale_filename,
+                            queue_age,
+                            len(in_progress),
+                            len(queue_items)
+                        )
+                        warned_queue_ids.add(stale_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as monitor_error:
+                    logger.error(f"Queue monitor error: {monitor_error}", exc_info=True)
+
         def schedule_retry(source_channel_id, source_message_id, target_dir_override=None):
             future = asyncio.run_coroutine_threadsafe(
                 retry_download_message(source_channel_id, source_message_id, target_dir_override),
@@ -1847,7 +2042,14 @@ try:
                             logger.error(f"Error executing command 'list': {e}")
                     elif command == "status":
                         try:
-                            output = "".join([ "{0}: {1}\n".format(key,value) for (key, value) in in_progress.items()])
+                            output = "".join([
+                                "{0}: {1} - {2}\n".format(
+                                    key,
+                                    value.get('filename', 'unknown'),
+                                    value.get('progress', '')
+                                )
+                                for (key, value) in in_progress.items()
+                            ])
                             if output: 
                                 output = "Active downloads:\n\n" + output
                             else: 
@@ -1924,12 +2126,36 @@ try:
                         os.makedirs(category_folder)
                         logger.info(f"Created category folder: {category_folder}")
 
+                    size = get_message_media_size(message_obj)
+                    if getattr(message_obj, 'photo', None):
+                       logger.info(f"Processing photo: {filename}, Estimated size: {size} bytes")
+                    else: 
+                       logger.info(f"Processing document: {filename}, Size: {size} bytes")
+
                     # Check for duplicates in the category folder
-                    temp_duplicate_path = build_safe_path(tempFolder, f"{tempfilename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}")
+                    in_progress_temp_path = build_safe_path(tempFolder, f"{filename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}")
                     final_duplicate_path = build_safe_path(category_folder, filename)
-                    if path.exists(temp_duplicate_path) or path.exists(final_duplicate_path):
-                        if duplicates == "rename":
-                           filename=tempfilename
+                    if path.exists(in_progress_temp_path) or path.exists(final_duplicate_path):
+                        should_rename_for_size_mismatch = path.exists(in_progress_temp_path)
+                        should_rename_for_unknown_size = False
+                        if path.exists(final_duplicate_path) and size > 0:
+                            try:
+                                existing_size = os.path.getsize(final_duplicate_path)
+                                should_rename_for_size_mismatch = existing_size != size
+                            except OSError:
+                                logger.warning(f"Unable to read existing file size for duplicate check: {final_duplicate_path}", exc_info=True)
+                                should_rename_for_unknown_size = True
+                        elif path.exists(final_duplicate_path):
+                            should_rename_for_unknown_size = True
+
+                        if should_rename_for_size_mismatch:
+                           filename = tempfilename
+                           logger.info(f"Renamed file because an existing file with the same name has a different size: {filename}")
+                        elif should_rename_for_unknown_size:
+                           filename = tempfilename
+                           logger.info(f"Renamed file because duplicate size could not be compared reliably: {filename}")
+                        elif duplicates == "rename":
+                           filename = tempfilename
                            logger.info(f"Renamed file to avoid duplicate: {filename}")
                         elif duplicates == "ignore":
                            logger.info(f"Ignoring duplicate file: {filename}")
@@ -1946,13 +2172,6 @@ try:
                                    conn.commit()
                            worker_queue.task_done()
                            continue
-
-                    if getattr(message_obj, 'photo', None):
-                       size = 0
-                       logger.info(f"Processing photo: {filename}")
-                    else: 
-                       size=message_obj.document.size
-                       logger.info(f"Processing document: {filename}, Size: {size} bytes")
 
                     # Update queued record into downloading state
                     download_path = build_safe_path(category_folder, filename)
@@ -1999,6 +2218,7 @@ try:
 
                     # 进度回调函数不能是异步的，所以我们需要使用一个同步的包装器
                     last_progress_time = [time.time()]
+                    last_speed_snapshot = [{'received': 0, 'timestamp': time.time()}]
                     def download_callback(received, total):
                         # 由于回调是同步的，我们不能直接await异步函数
                         # 但我们可以记录进度，然后在合适的时候更新
@@ -2006,9 +2226,25 @@ try:
                         percentage = math.trunc(received / total * 10000) / 100
                         progress_message = "{0} % ({1} / {2})".format(percentage, received, total)
                         last_progress_time[0] = time.time()
+
+                        previous_received = last_speed_snapshot[0]['received']
+                        previous_timestamp = last_speed_snapshot[0]['timestamp']
+                        elapsed_seconds = max(last_progress_time[0] - previous_timestamp, 0.001)
+                        bytes_delta = max(received - previous_received, 0)
+                        speed_bps = bytes_delta / elapsed_seconds
+                        last_speed_snapshot[0] = {
+                            'received': received,
+                            'timestamp': last_progress_time[0],
+                        }
                         
                         with sync_lock:
-                            in_progress[filename] = progress_message
+                            in_progress[str(download_id)] = {
+                                'filename': filename,
+                                'progress': progress_message,
+                                'size': size,
+                                'source_message_link': source_message_link,
+                                'speed_bps': speed_bps,
+                            }
                             # 确保全局变量同步
                             global web_in_progress
                             web_in_progress = in_progress
@@ -2034,6 +2270,7 @@ try:
                         
                         # Send WebSocket notification for download progress
                         socketio.emit('download_progress', {
+                            'task_id': download_id,
                             'filename': filename,
                             'progress': percentage,
                             'received': received,
@@ -2092,7 +2329,7 @@ try:
 
                         await download_task
                         
-                        await set_progress(filename, message, 100, 100)
+                        await set_progress(download_id, filename, message, 100, 100, size=size, source_message_link=source_message_link)
                         move(build_safe_path(tempFolder, f"{filename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}"), download_path)
                     except asyncio.TimeoutError as e:
                         if download_task is not None and not download_task.done():
@@ -2137,6 +2374,11 @@ try:
                     # 捕获所有异常，确保任务不会永久卡住
                     error_msg = str(e)
                     logger.error(f"Download failed: {filename} - {error_msg}")
+                    with contextlib.suppress(Exception):
+                        with sync_lock:
+                            in_progress.pop(str(download_id), None)
+                            global web_in_progress
+                            web_in_progress = in_progress
                     
                     # 获取当前重试次数
                     current_retry = 0
@@ -2193,6 +2435,9 @@ try:
 
         dynamic_worker_count = max(1, int(worker_count))
         logger.info(f"Worker分配：动态共享worker={dynamic_worker_count}，按队列积压自动取图/视频/其他任务")
+
+        queue_monitor_task = loop.create_task(monitor_queue_health())
+        tasks.append(queue_monitor_task)
 
         for i in range(dynamic_worker_count):
             task = loop.create_task(worker(i + 1))
