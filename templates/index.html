@@ -1051,6 +1051,9 @@
                     {% if proxy %}
                     <p><strong>Type:</strong> {{ proxy.type }}</p>
                     <p><strong>Address:</strong> {{ proxy.host }}:{{ proxy.port }}</p>
+                    {% if proxy.resolved_once and proxy.runtime_host and proxy.runtime_host != proxy.host %}
+                    <p><strong>Pinned IP:</strong> {{ proxy.runtime_host }}</p>
+                    {% endif %}
                     {% if proxy.username %}
                     <p><strong>Username:</strong> {{ proxy.username }}</p>
                     {% endif %}
@@ -1299,6 +1302,11 @@
         let overlayVisible = false;
         let retryModalState = null;
         let actionModalState = null;
+        let authDraft = {
+            phone: authState.phone || '',
+            code: '',
+            password: ''
+        };
 
         function showScreenOverlay(message = 'Sending verification code...') {
             overlayVisible = true;
@@ -1307,6 +1315,7 @@
             text.textContent = message;
             overlay.classList.add('is-visible');
             overlay.setAttribute('aria-hidden', 'false');
+            updateAuthPanelDynamicState();
         }
 
         function hideScreenOverlay() {
@@ -1314,6 +1323,7 @@
             const overlay = document.getElementById('screen-overlay');
             overlay.classList.remove('is-visible');
             overlay.setAttribute('aria-hidden', 'true');
+            updateAuthPanelDynamicState();
         }
 
         function renderTelegramUserPanel() {
@@ -1507,12 +1517,12 @@
 
             if (cooldownSeconds <= 0) {
                 sendCodeCooldownUntil = 0;
-                renderAuthPanel();
+                updateAuthPanelDynamicState();
                 return;
             }
 
             sendCodeCooldownUntil = Date.now() + cooldownSeconds * 1000;
-            renderAuthPanel();
+            updateAuthPanelDynamicState();
 
             sendCodeCooldownTimer = window.setInterval(() => {
                 const remaining = getSendCodeRemainingSeconds();
@@ -1521,26 +1531,106 @@
                     sendCodeCooldownTimer = null;
                     sendCodeCooldownUntil = 0;
                 }
-                renderAuthPanel();
+                updateAuthPanelDynamicState();
             }, 1000);
         }
 
-        function renderAuthPanel() {
-            const panel = document.getElementById('auth-panel');
-            panel.innerHTML = '';
+        function syncAuthDraftWithState() {
+            authDraft.phone = authState.phone || authDraft.phone || '';
+            if (!authState.awaiting_code) {
+                authDraft.code = '';
+            }
+            if (!authState.requires_password) {
+                authDraft.password = '';
+            }
+            if (authState.authorized) {
+                authDraft.code = '';
+                authDraft.password = '';
+            }
+        }
+
+        function captureAuthDraft() {
+            const phoneInput = document.getElementById('auth-phone');
+            const codeInput = document.getElementById('auth-code');
+            const passwordInput = document.getElementById('auth-password');
+
+            if (phoneInput) {
+                authDraft.phone = phoneInput.value;
+            }
+            if (codeInput) {
+                authDraft.code = codeInput.value;
+            }
+            if (passwordInput) {
+                authDraft.password = passwordInput.value;
+            }
+        }
+
+        function bindAuthDraft(input, fieldName) {
+            input.addEventListener('input', () => {
+                authDraft[fieldName] = input.value;
+            });
+        }
+
+        function getAuthPanelSignature() {
+            return JSON.stringify({
+                authorized: Boolean(authState.authorized),
+                awaiting_code: Boolean(authState.awaiting_code),
+                requires_password: Boolean(authState.requires_password)
+            });
+        }
+
+        function updateAuthPanelDynamicState() {
             const resendAvailableIn = getSendCodeRemainingSeconds() || Number(authState.resend_available_in) || 0;
+            const badge = document.getElementById('auth-badge');
+            const message = document.getElementById('auth-message');
+            const sendCodeBtn = document.getElementById('auth-send-code-btn');
+
+            if (badge) {
+                badge.className = `auth-badge ${authState.authorized ? 'auth-badge-ready' : 'auth-badge-waiting'}`;
+                badge.textContent = authState.authorized ? 'Authorized' : 'Login Required';
+            }
+
+            if (message) {
+                message.textContent = authState.message || (authState.authorized ? 'Telegram is ready.' : 'Please sign in.');
+            }
+
+            if (sendCodeBtn) {
+                sendCodeBtn.textContent = resendAvailableIn > 0
+                    ? `Resend in ${resendAvailableIn}s`
+                    : (authState.awaiting_code ? 'Resend Code' : 'Send Code');
+                sendCodeBtn.disabled = resendAvailableIn > 0 || overlayVisible;
+            }
+        }
+
+        function renderAuthPanel(force = false) {
+            const panel = document.getElementById('auth-panel');
+            if (!panel) {
+                return;
+            }
+
+            captureAuthDraft();
+            syncAuthDraftWithState();
+
+            const nextSignature = getAuthPanelSignature();
+            if (!force && panel.dataset.authSignature === nextSignature) {
+                updateAuthPanelDynamicState();
+                return;
+            }
+
+            panel.dataset.authSignature = nextSignature;
+            panel.innerHTML = '';
 
             const badge = document.createElement('div');
-            badge.className = `auth-badge ${authState.authorized ? 'auth-badge-ready' : 'auth-badge-waiting'}`;
-            badge.textContent = authState.authorized ? 'Authorized' : 'Login Required';
+            badge.id = 'auth-badge';
             panel.appendChild(badge);
 
             const message = document.createElement('p');
+            message.id = 'auth-message';
             message.className = 'auth-message';
-            message.textContent = authState.message || (authState.authorized ? 'Telegram is ready.' : 'Please sign in.');
             panel.appendChild(message);
 
             if (authState.authorized) {
+                updateAuthPanelDynamicState();
                 return;
             }
 
@@ -1549,14 +1639,30 @@
 
             const phoneInput = document.createElement('input');
             phoneInput.id = 'auth-phone';
+            phoneInput.type = 'tel';
+            phoneInput.autocomplete = 'tel';
+            phoneInput.inputMode = 'tel';
+            phoneInput.enterKeyHint = authState.awaiting_code || authState.requires_password ? 'next' : 'send';
             phoneInput.placeholder = 'Phone number (for example +8613800138000)';
-            phoneInput.value = authState.phone || '';
+            phoneInput.value = authDraft.phone || '';
+            bindAuthDraft(phoneInput, 'phone');
             form.appendChild(phoneInput);
 
             if (authState.awaiting_code) {
                 const codeInput = document.createElement('input');
                 codeInput.id = 'auth-code';
+                codeInput.autocomplete = 'one-time-code';
+                codeInput.inputMode = 'numeric';
+                codeInput.enterKeyHint = authState.requires_password ? 'next' : 'done';
                 codeInput.placeholder = 'Verification code';
+                codeInput.value = authDraft.code || '';
+                codeInput.addEventListener('keydown', (event) => {
+                    if (event.key === 'Enter') {
+                        event.preventDefault();
+                        verifyAuthCode();
+                    }
+                });
+                bindAuthDraft(codeInput, 'code');
                 form.appendChild(codeInput);
             }
 
@@ -1564,7 +1670,17 @@
                 const passwordInput = document.createElement('input');
                 passwordInput.id = 'auth-password';
                 passwordInput.type = 'password';
+                passwordInput.autocomplete = 'current-password';
+                passwordInput.enterKeyHint = 'done';
                 passwordInput.placeholder = 'Two-step verification password';
+                passwordInput.value = authDraft.password || '';
+                passwordInput.addEventListener('keydown', (event) => {
+                    if (event.key === 'Enter') {
+                        event.preventDefault();
+                        verifyAuthPassword();
+                    }
+                });
+                bindAuthDraft(passwordInput, 'password');
                 form.appendChild(passwordInput);
             }
 
@@ -1572,11 +1688,8 @@
             actions.className = 'auth-actions';
 
             const sendCodeBtn = document.createElement('button');
+            sendCodeBtn.id = 'auth-send-code-btn';
             sendCodeBtn.className = 'auth-btn auth-btn-primary';
-            sendCodeBtn.textContent = resendAvailableIn > 0
-                ? `Resend in ${resendAvailableIn}s`
-                : (authState.awaiting_code ? 'Resend Code' : 'Send Code');
-            sendCodeBtn.disabled = resendAvailableIn > 0 || overlayVisible;
             sendCodeBtn.addEventListener('click', sendAuthCode);
             actions.appendChild(sendCodeBtn);
 
@@ -1598,6 +1711,7 @@
 
             form.appendChild(actions);
             panel.appendChild(form);
+            updateAuthPanelDynamicState();
         }
 
         async function refreshAuthStatus() {

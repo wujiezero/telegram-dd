@@ -11,6 +11,7 @@ import random
 import string
 import os
 import os.path
+import socket
 import threading
 import sqlite3
 import glob
@@ -19,11 +20,19 @@ import socks
 from flask import Flask, jsonify, render_template_string, request, send_file
 from flask_socketio import SocketIO
 
-from sessionManager import getSession, saveSession
+from sessionManager import (
+    SingleInstanceLockError,
+    acquireProcessLock,
+    archiveSessionArtifacts,
+    getLockPath,
+    getSession,
+    releaseProcessLock,
+    saveSession,
+)
 
 from telethon import TelegramClient, events, __version__
 from telethon.tl.types import PeerChannel, DocumentAttributeFilename, DocumentAttributeVideo
-from telethon.errors import SessionPasswordNeededError
+from telethon.errors import AuthKeyDuplicatedError, SessionPasswordNeededError
 import logging
 
 # Set up logging
@@ -59,6 +68,7 @@ TELEGRAM_DAEMON_PROXY_PORT=getenv("TELEGRAM_DAEMON_PROXY_PORT")
 TELEGRAM_DAEMON_PROXY_TYPE=getenv("TELEGRAM_DAEMON_PROXY_TYPE", "socks5")
 TELEGRAM_DAEMON_PROXY_USERNAME=getenv("TELEGRAM_DAEMON_PROXY_USERNAME")
 TELEGRAM_DAEMON_PROXY_PASSWORD=getenv("TELEGRAM_DAEMON_PROXY_PASSWORD")
+TELEGRAM_DAEMON_PROXY_RESOLVE_ONCE=str(getenv("TELEGRAM_DAEMON_PROXY_RESOLVE_ONCE", "0")).strip().lower() in ("1", "true", "yes", "on")
 
 # 可配置参数
 TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT=int(getenv("TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT", "3600"))  # 下载超时，默认1小时
@@ -104,6 +114,21 @@ parser.add_argument(
     default=TELEGRAM_DAEMON_PROXY_PASSWORD,
     help=
     'Proxy password (default is TELEGRAM_DAEMON_PROXY_PASSWORD env var)'
+)
+parser.add_argument(
+    "--proxy-resolve-once",
+    dest="proxy_resolve_once",
+    action="store_true",
+    default=TELEGRAM_DAEMON_PROXY_RESOLVE_ONCE,
+    help=
+    'Resolve the proxy host once at startup and pin that IP for the process lifetime. Useful for DNS load-balanced proxies.'
+)
+parser.add_argument(
+    "--no-proxy-resolve-once",
+    dest="proxy_resolve_once",
+    action="store_false",
+    help=
+    'Disable one-time proxy host resolution and keep using the configured proxy hostname directly.'
 )
 parser.add_argument(
     "--api-id",
@@ -158,6 +183,30 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
+
+def resolve_proxy_host_once(host, port):
+    if not host:
+        return host
+
+    for family in (socket.AF_INET, socket.AF_INET6):
+        try:
+            socket.inet_pton(family, host)
+            return host
+        except OSError:
+            continue
+
+    try:
+        address_info = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        logger.warning("Failed to resolve proxy host %s:%s once: %s", host, port, exc)
+        return host
+
+    ipv4_matches = [entry for entry in address_info if entry[0] == socket.AF_INET]
+    preferred_entry = ipv4_matches[0] if ipv4_matches else address_info[0]
+    resolved_host = preferred_entry[4][0]
+    logger.info("Resolved proxy host %s:%s to %s for this process", host, port, resolved_host)
+    return resolved_host
+
 api_id = args.api_id
 api_hash = args.api_hash
 channel_id = args.channel
@@ -179,6 +228,9 @@ if not tempFolder:
 # Proxy configuration
 connection = None
 proxy = None
+proxy_configured_host = None
+proxy_runtime_host = None
+proxy_resolved_once = False
 if args.proxy_host and args.proxy_port:
     # 使用字符串格式的代理类型，确保兼容性
     proxy_type_str = args.proxy_type.lower()
@@ -193,12 +245,29 @@ if args.proxy_host and args.proxy_port:
         'http': socks.HTTP,
     }
     proxy_type_const = proxy_type_map.get(proxy_type_str, socks.SOCKS5)
+    proxy_configured_host = args.proxy_host
+    proxy_runtime_host = args.proxy_host
+
+    if args.proxy_resolve_once and proxy_type_str in ['socks5', 'http']:
+        proxy_runtime_host = resolve_proxy_host_once(args.proxy_host, int(args.proxy_port))
+        proxy_resolved_once = proxy_runtime_host != args.proxy_host
+    elif proxy_type_str in ['socks5', 'http']:
+        try:
+            socket.inet_pton(socket.AF_INET, args.proxy_host)
+        except OSError:
+            try:
+                socket.inet_pton(socket.AF_INET6, args.proxy_host)
+            except OSError:
+                logger.warning(
+                    "Proxy host %s is a hostname. If your provider does DNS load balancing and Telegram reports AUTH_KEY_DUPLICATED, enable --proxy-resolve-once or TELEGRAM_DAEMON_PROXY_RESOLVE_ONCE=1.",
+                    args.proxy_host,
+                )
     
     # 根据是否有认证信息创建代理配置
     if args.proxy_username and args.proxy_password:
         proxy = (
             proxy_type_const,
-            args.proxy_host,
+            proxy_runtime_host,
             int(args.proxy_port),
             False,
             args.proxy_username,
@@ -208,7 +277,7 @@ if args.proxy_host and args.proxy_port:
     else:
         proxy = (
             proxy_type_const,
-            args.proxy_host,
+            proxy_runtime_host,
             int(args.proxy_port),
             False
         )
@@ -475,6 +544,59 @@ web_auth_verify_password = None
 AUTH_SEND_CODE_COOLDOWN_SECONDS = 60
 auth_send_code_cooldown_until = 0.0
 auth_send_code_lock = threading.Lock()
+web_server_thread = None
+
+
+def set_relogin_required_state(message):
+    global web_client, web_in_progress, web_queue_items, telegram_user_info, telegram_channel_info
+    global web_retry_scheduler, telegram_auth_state, web_auth_send_code, web_auth_verify_code
+    global web_auth_verify_password, auth_send_code_cooldown_until
+
+    web_client = None
+    web_in_progress = {}
+    web_queue_items = []
+    telegram_user_info = None
+    telegram_channel_info = None
+    web_retry_scheduler = None
+    web_auth_send_code = None
+    web_auth_verify_code = None
+    web_auth_verify_password = None
+    auth_send_code_cooldown_until = 0.0
+    telegram_auth_state = {
+        'authorized': False,
+        'awaiting_code': False,
+        'requires_password': False,
+        'phone': '',
+        'resend_available_in': 0,
+        'message': message,
+    }
+
+
+def handle_auth_key_duplicated_recovery():
+    archived_paths = archiveSessionArtifacts("auth_key_duplicated")
+    archived_note = " Previous session files were archived." if archived_paths else ""
+    message = (
+        "Telegram invalidated the previous session because it appeared from multiple IP addresses. "
+        "Please sign in again from this page."
+        f"{archived_note}"
+    )
+    set_relogin_required_state(message)
+    if archived_paths:
+        logger.warning("Archived invalid session artifacts: %s", ", ".join(archived_paths))
+    else:
+        logger.warning("Telegram session was invalidated, but no local session artifact was found to archive")
+    return message
+
+
+def ensure_web_server_started():
+    global web_server_thread
+
+    if web_server_thread and web_server_thread.is_alive():
+        return
+
+    web_server_thread = threading.Thread(target=run_web_server, daemon=True)
+    web_server_thread.start()
+    logger.info("Web server started on http://0.0.0.0:7373")
 
 
 def get_auth_send_code_remaining():
@@ -516,17 +638,21 @@ def index():
             # Handle tuple format proxy
             proxy_info = {
                 'type': proxy[0] if len(proxy) > 0 else 'socks5',
-                'host': proxy[1] if len(proxy) > 1 else '',
+                'host': proxy_configured_host or (proxy[1] if len(proxy) > 1 else ''),
+                'runtime_host': proxy_runtime_host or (proxy[1] if len(proxy) > 1 else ''),
                 'port': proxy[2] if len(proxy) > 2 else '',
-                'username': proxy[4] if len(proxy) > 4 else ''
+                'username': proxy[4] if len(proxy) > 4 else '',
+                'resolved_once': proxy_resolved_once,
             }
         else:
             # Handle dict format proxy
             proxy_info = {
                 'type': proxy.get('proxy_type', 'socks5'),
                 'host': proxy.get('addr', ''),
+                'runtime_host': proxy_runtime_host or proxy.get('addr', ''),
                 'port': proxy.get('port', ''),
-                'username': proxy.get('username', '')
+                'username': proxy.get('username', ''),
+                'resolved_once': proxy_resolved_once,
             }
     
     # Get telegram user info (stored in a global variable that's updated when client starts)
@@ -1106,7 +1232,44 @@ async def sendHelloMessage(client: TelegramClient, peerChannel: PeerChannel) -> 
     print(f"  Simultaneous downloads: {worker_count}")
     await client.send_message(entity, f"Telegram Download Daemon {TDD_VERSION} using Telethon {__version__}")
     await client.send_message(entity, "Hi! Ready for your files!")
- 
+
+
+def build_client(loop):
+    return TelegramClient(getSession(), api_id, api_hash, proxy=proxy, loop=loop)
+
+
+def connect_client_with_recovery(loop):
+    global client, web_client
+
+    client = build_client(loop)
+    try:
+        loop.run_until_complete(client.connect())
+        web_client = client
+        return None
+    except AuthKeyDuplicatedError:
+        message = handle_auth_key_duplicated_recovery()
+        with contextlib.suppress(Exception):
+            loop.run_until_complete(client.disconnect())
+
+        client = build_client(loop)
+        loop.run_until_complete(client.connect())
+        web_client = client
+        logger.info("Telegram client reinitialized with a fresh session; waiting for web login")
+        return message
+
+
+def disconnect_client_and_loop(loop, client_instance):
+    if loop is None:
+        return
+
+    if client_instance is not None:
+        with contextlib.suppress(Exception):
+            if not loop.is_closed():
+                loop.run_until_complete(client_instance.disconnect())
+
+    if not loop.is_closed():
+        loop.close()
+
 
 async def log_reply(message: events.NewMessage.Event, reply: str) -> None:
     print(reply)
@@ -1225,6 +1388,8 @@ try:
     logger.info(f"Download folder: {downloadFolder}, Temp folder: {tempFolder}")
     logger.info(f"Worker count: {worker_count}")
     logger.info(f"Download timeout: {download_timeout}s, Start timeout: {start_timeout}s, Update frequency: {updateFrequency}s, Max retries: {max_retries}, Notify failure: {notify_failure}")
+    logger.info("Session lock path: %s", getLockPath())
+    acquireProcessLock()
     
     # 清理残留的临时文件
     cleanup_temp_files()
@@ -1235,7 +1400,18 @@ try:
     # Log proxy configuration
     if proxy:
         if isinstance(proxy, tuple):
-            logger.info(f"Using proxy: {proxy[1]}:{proxy[2]} with {'authentication' if len(proxy) > 4 and proxy[4] else 'no authentication'}")
+            configured_endpoint = proxy_configured_host or proxy[1]
+            auth_mode = 'authentication' if len(proxy) > 4 and proxy[4] else 'no authentication'
+            if proxy_resolved_once and proxy_runtime_host:
+                logger.info(
+                    "Using proxy: %s:%s pinned to %s with %s",
+                    configured_endpoint,
+                    proxy[2],
+                    proxy_runtime_host,
+                    auth_mode,
+                )
+            else:
+                logger.info("Using proxy: %s:%s with %s", configured_endpoint, proxy[2], auth_mode)
         else:
             logger.info(f"Using proxy: {proxy.get('addr')}:{proxy.get('port')} with {'authentication' if proxy.get('username') else 'no authentication'}")
     else:
@@ -1244,19 +1420,13 @@ try:
     # Create client without interactive auth prompts
     main_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(main_loop)
-    client = TelegramClient(getSession(), api_id, api_hash, proxy=proxy, loop=main_loop)
-    main_loop.run_until_complete(client.connect())
-    
-    # Update web_client reference
-    web_client = client
+    initial_auth_message = connect_client_with_recovery(main_loop)
     logger.info("Telegram client initialized successfully")
     
     # Start Web Server in a separate thread
-    web_server_thread = threading.Thread(target=run_web_server, daemon=True)
-    web_server_thread.start()
-    logger.info("Web server started on http://0.0.0.0:7373")
+    ensure_web_server_started()
 
-    async def start():
+    async def start(initial_auth_message=None):
         # 在 start 函数内部管理所有状态
         in_progress = {}
         lastUpdate = 0
@@ -1455,7 +1625,7 @@ try:
         web_auth_verify_code = lambda phone, code: schedule_auth_call(verify_login_code(phone, code))
         web_auth_verify_password = lambda password: schedule_auth_call(verify_login_password(password))
 
-        await refresh_auth_state()
+        await refresh_auth_state(initial_auth_message)
         if not telegram_auth_state.get('authorized'):
             logger.info("Telegram client is waiting for web login")
             await auth_ready_event.wait()
@@ -2034,21 +2204,38 @@ try:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    main_loop.run_until_complete(start())
+    main_loop.run_until_complete(start(initial_auth_message))
     
     # Disconnect the client when done
-    main_loop.run_until_complete(client.disconnect())
-    main_loop.close()
+    disconnect_client_and_loop(main_loop, client)
     logger.info("Telegram client disconnected")
+except SingleInstanceLockError as e:
+    logger.error(str(e))
+    raise SystemExit(1)
+except AuthKeyDuplicatedError:
+    logger.error(
+        "Telegram invalidated this session because the same auth key appeared from multiple IP addresses. Switching the web UI back to login mode.",
+        exc_info=True,
+    )
+    relogin_message = handle_auth_key_duplicated_recovery()
+    if 'main_loop' in locals():
+        disconnect_client_and_loop(main_loop, locals().get('client'))
+    handle_interrupted_tasks()
+
+    main_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(main_loop)
+    initial_auth_message = connect_client_with_recovery(main_loop) or relogin_message
+    ensure_web_server_started()
+    logger.info("Telegram client restarted in re-login mode after AUTH_KEY_DUPLICATED")
+    main_loop.run_until_complete(start(initial_auth_message))
+    disconnect_client_and_loop(main_loop, client)
+    logger.info("Telegram client disconnected after re-login flow")
 except Exception as e:
     logger.error(f"Critical error: {e}", exc_info=True)
     # Disconnect the client if an error occurs
-    if 'main_loop' in locals() and 'client' in locals() and client:
-        try:
-            if not main_loop.is_closed():
-                main_loop.run_until_complete(client.disconnect())
-                main_loop.close()
-        except Exception:
-            pass
+    if 'main_loop' in locals():
+        disconnect_client_and_loop(main_loop, locals().get('client'))
         logger.info("Telegram client disconnected due to error")
     raise
+finally:
+    releaseProcessLock()

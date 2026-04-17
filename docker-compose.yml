@@ -13,6 +13,7 @@ services:
       - TELEGRAM_DAEMON_DEST=/downloads
       - TELEGRAM_DAEMON_SESSION_PATH=/session
       - TELEGRAM_DAEMON_WORKERS=2
+      - TELEGRAM_DAEMON_PROXY_RESOLVE_ONCE=1
       # Proxy configuration (uncomment and modify if needed)
       #- TELEGRAM_DAEMON_PROXY_HOST=x.x.x.x
       #- TELEGRAM_DAEMON_PROXY_PORT=7890

@@ -1,12 +1,28 @@
+import atexit
+import glob
 import logging
 import os
+import socket
+import time
 from os import getenv, path
 from telethon.sessions import StringSession
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback
+    fcntl = None
+
 TELEGRAM_DAEMON_SESSION_PATH = getenv("TELEGRAM_DAEMON_SESSION_PATH")
+TELEGRAM_DAEMON_LOCK_FILE = getenv("TELEGRAM_DAEMON_LOCK_FILE")
 sessionName = "DownloadDaemon"
 stringSessionFilename = "{0}.session".format(sessionName)
+lockFilename = "{0}.lock".format(sessionName)
 logger = logging.getLogger('telegram-download-daemon.session')
+_lockHandle = None
+
+
+class SingleInstanceLockError(RuntimeError):
+    pass
 
 
 def _getSessionPath():
@@ -14,6 +30,47 @@ def _getSessionPath():
         return None
     os.makedirs(TELEGRAM_DAEMON_SESSION_PATH, exist_ok=True)
     return path.join(TELEGRAM_DAEMON_SESSION_PATH, stringSessionFilename)
+
+
+def _getLockPath():
+    if TELEGRAM_DAEMON_LOCK_FILE:
+        lock_dir = path.dirname(TELEGRAM_DAEMON_LOCK_FILE)
+        if lock_dir:
+            os.makedirs(lock_dir, exist_ok=True)
+        return TELEGRAM_DAEMON_LOCK_FILE
+
+    if TELEGRAM_DAEMON_SESSION_PATH:
+        os.makedirs(TELEGRAM_DAEMON_SESSION_PATH, exist_ok=True)
+        return path.join(TELEGRAM_DAEMON_SESSION_PATH, lockFilename)
+
+    return path.join("/tmp", lockFilename)
+
+
+def getLockPath():
+    return _getLockPath()
+
+
+def archiveSessionArtifacts(reason="invalid"):
+    timestamp = time.strftime('%Y%m%d-%H%M%S')
+    archived_paths = []
+
+    if TELEGRAM_DAEMON_SESSION_PATH:
+        sessionPath = _getSessionPath()
+        if sessionPath and path.exists(sessionPath):
+            archivedPath = f"{sessionPath}.{reason}.{timestamp}"
+            os.replace(sessionPath, archivedPath)
+            archived_paths.append(archivedPath)
+        return archived_paths
+
+    session_prefix = f"{sessionName}.session"
+    session_artifacts = sorted(glob.glob(f"{session_prefix}*"))
+    for session_artifact in session_artifacts:
+        suffix = session_artifact[len(session_prefix):]
+        archived_path = f"{session_prefix}.{reason}.{timestamp}{suffix}"
+        os.replace(session_artifact, archived_path)
+        archived_paths.append(archived_path)
+
+    return archived_paths
 
 
 def _getStringSessionIfExists():
@@ -57,3 +114,64 @@ def saveSession(session):
                     os.remove(tempPath)
             except OSError:
                 pass
+
+
+def acquireProcessLock():
+    global _lockHandle
+
+    if _lockHandle is not None:
+        return _lockHandle
+
+    lockPath = _getLockPath()
+    lockHandle = open(lockPath, 'a+', encoding='utf-8')
+
+    if fcntl is None:
+        logger.warning("fcntl is unavailable on this platform; single-instance lock is disabled")
+        _lockHandle = lockHandle
+        return _lockHandle
+
+    try:
+        fcntl.flock(lockHandle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        lockHandle.seek(0)
+        owner = lockHandle.read().strip()
+        lockHandle.close()
+        owner_text = f" Lock owner: {owner}" if owner else ""
+        raise SingleInstanceLockError(
+            f"Another telegram-download-daemon instance is already using this session lock: {lockPath}.{owner_text}"
+        )
+
+    lockHandle.seek(0)
+    lockHandle.truncate()
+    lockHandle.write(
+        "pid={pid} host={host} started_at={started_at}\n".format(
+            pid=os.getpid(),
+            host=socket.gethostname(),
+            started_at=time.strftime('%Y-%m-%d %H:%M:%S'),
+        )
+    )
+    lockHandle.flush()
+    os.fsync(lockHandle.fileno())
+    _lockHandle = lockHandle
+    atexit.register(releaseProcessLock)
+    logger.info("Single-instance lock acquired: %s", lockPath)
+    return _lockHandle
+
+
+def releaseProcessLock():
+    global _lockHandle
+
+    if _lockHandle is None:
+        return
+
+    try:
+        if fcntl is not None:
+            fcntl.flock(_lockHandle.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass
+    finally:
+        try:
+            _lockHandle.close()
+        except OSError:
+            pass
+        _lockHandle = None
