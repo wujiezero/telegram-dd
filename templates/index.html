@@ -520,7 +520,72 @@
         }
 
         .pager-info { font-size: 12px; color: var(--text-3); }
-        .pager-nav { display: flex; gap: 6px; }
+        .pager-nav {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
+        .pager-size {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--text-2);
+            font-size: 13px;
+            white-space: nowrap;
+        }
+
+        .pager-size-label,
+        .pager-size-unit {
+            color: var(--text-2);
+        }
+
+        .pager-size-select {
+            min-width: 72px;
+            height: 40px;
+            padding: 0 34px 0 14px;
+            border-radius: 14px;
+            border: 1px solid var(--line);
+            background-color: var(--bg-2);
+            color: var(--text-1);
+            font-size: 15px;
+            font-weight: 600;
+            line-height: 40px;
+            text-align: center;
+            text-align-last: center;
+            -webkit-appearance: none;
+            appearance: none;
+            background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'><path fill='%23aab6c3' d='M5 7l5 6 5-6z'/></svg>");
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            background-size: 14px;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+        }
+
+        .pager-size-select:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px var(--accent-soft);
+        }
+
+        .pager-size-select option {
+            text-align: center;
+            background: var(--bg-2);
+            color: var(--text-1);
+        }
+
+        @media (max-width: 640px) {
+            .pager {
+                align-items: flex-start;
+            }
+
+            .pager-nav {
+                width: 100%;
+                justify-content: space-between;
+            }
+        }
 
         .empty {
             padding: 40px 20px;
@@ -883,16 +948,16 @@
             </div>
             <div class="pager">
                 <div class="pager-info" id="pagerInfo">–</div>
-                <div class="pager-nav" style="display:flex; gap:8px; align-items:center">
-                    <label style="display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:13px">
-                        每页
-                        <select class="select" id="perPageSelect" style="min-width:auto; padding:4px 8px">
+                <div class="pager-nav">
+                    <label class="pager-size">
+                        <span class="pager-size-label">每页</span>
+                        <select class="pager-size-select" id="perPageSelect" aria-label="每页条数">
                             <option value="10">10</option>
                             <option value="20">20</option>
                             <option value="50">50</option>
                             <option value="100">100</option>
                         </select>
-                        条
+                        <span class="pager-size-unit">条</span>
                     </label>
                     <button class="btn" id="pagePrev">上一页</button>
                     <button class="btn" id="pageNext">下一页</button>
@@ -947,7 +1012,7 @@
         </div>
     </div>
 
-    <!-- 图片预览 Lightbox -->
+    <!-- 媒体预览 Lightbox -->
     <div class="modal-mask" id="lightboxModal" role="dialog" aria-modal="true" style="background:rgba(0,0,0,.85)">
         <div class="modal" style="background:transparent; box-shadow:none; max-width:min(94vw,1200px); width:auto">
             <div class="modal-header" style="background:transparent; border-bottom:none; padding:8px 12px">
@@ -958,9 +1023,10 @@
             </div>
             <div class="modal-body" style="padding:0; display:flex; align-items:center; justify-content:center; min-height:60vh">
                 <img id="lightboxImg" alt="" style="max-width:100%; max-height:80vh; display:block; border-radius:6px" />
+                <video id="lightboxVideo" controls playsinline preload="metadata" style="max-width:100%; max-height:80vh; display:none; border-radius:6px; background:#000"></video>
             </div>
             <div class="modal-footer" style="background:transparent; border-top:none; justify-content:space-between">
-                <a class="btn" id="lightboxDownload" href="#" target="_blank" rel="noreferrer">下载原图</a>
+                <a class="btn" id="lightboxDownload" href="#" target="_blank" rel="noreferrer">下载原文件</a>
                 <button class="btn" data-close-modal="lightboxModal">关闭</button>
             </div>
         </div>
@@ -1113,6 +1179,13 @@
             return 'Documents';
         }
 
+        function getPreviewKind(item, iconType) {
+            if (item.status !== 'completed') return '';
+            if (iconType === 'Pictures') return 'image';
+            if (iconType === 'Videos') return 'video';
+            return '';
+        }
+
         function renderStats(status) {
             if (!status) return;
             if (status.active_downloads != null) $('#statActive').textContent = status.active_downloads;
@@ -1213,16 +1286,19 @@
                 progressHtml = `<div class="progress"><span style="width:${Math.min(100, percentage).toFixed(2)}%"></span></div>`;
             }
 
-            // 仅完成的图片才能点缩略图预览；其他情况还是静态展示
-            const isImagePreviewable = item.status === 'completed' && (iconType === 'Pictures');
+            const previewKind = getPreviewKind(item, iconType);
             const thumbImgSrc = item.thumbnail_path ? `/api/thumbnail?task_id=${item.id}` : '';
             let thumb;
             if (item.status === 'completed' && item.thumbnail_path) {
-                if (isImagePreviewable) {
-                    thumb = `<button type="button" class="row-thumb-btn" data-action="preview" data-id="${item.id}" data-name="${escapeHtml(item.filename)}" style="all:unset; cursor:zoom-in; display:block; width:100%; height:100%"><img loading="lazy" src="${thumbImgSrc}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{innerHTML:this.dataset.fallback}))" data-fallback="${escapeHtml(fileIcon(iconType))}"></button>`;
+                if (previewKind) {
+                    const cursor = previewKind === 'video' ? 'pointer' : 'zoom-in';
+                    thumb = `<button type="button" class="row-thumb-btn" data-action="preview" data-preview-kind="${previewKind}" data-id="${item.id}" data-name="${escapeHtml(item.filename)}" style="all:unset; cursor:${cursor}; display:block; width:100%; height:100%"><img loading="lazy" src="${thumbImgSrc}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{innerHTML:this.dataset.fallback}))" data-fallback="${escapeHtml(fileIcon(iconType))}"></button>`;
                 } else {
                     thumb = `<img loading="lazy" src="${thumbImgSrc}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{innerHTML:this.dataset.fallback}))" data-fallback="${escapeHtml(fileIcon(iconType))}">`;
                 }
+            } else if (previewKind) {
+                const cursor = previewKind === 'video' ? 'pointer' : 'zoom-in';
+                thumb = `<button type="button" class="row-thumb-btn" data-action="preview" data-preview-kind="${previewKind}" data-id="${item.id}" data-name="${escapeHtml(item.filename)}" style="all:unset; cursor:${cursor}; display:flex; width:100%; height:100%; align-items:center; justify-content:center">${fileIcon(iconType)}</button>`;
             } else {
                 thumb = fileIcon(iconType);
             }
@@ -1508,14 +1584,37 @@
         }
 
         // ---------- Lightbox 预览 ----------
-        function openLightbox(src, title, downloadHref) {
+        function openLightbox(kind, src, title, downloadHref) {
             const img = $('#lightboxImg');
-            img.src = src;
+            const video = $('#lightboxVideo');
+            if (kind === 'video') {
+                img.style.display = 'none';
+                img.removeAttribute('src');
+                video.style.display = 'block';
+                video.src = src;
+                video.load();
+            } else {
+                video.pause();
+                video.style.display = 'none';
+                video.removeAttribute('src');
+                img.style.display = 'block';
+                img.src = src;
+            }
             $('#lightboxTitle').textContent = title || '';
             const dl = $('#lightboxDownload');
             if (downloadHref) { dl.style.display = ''; dl.href = downloadHref; }
             else { dl.style.display = 'none'; }
             openModal('lightboxModal');
+        }
+
+        function resetLightbox() {
+            const img = $('#lightboxImg');
+            const video = $('#lightboxVideo');
+            img.removeAttribute('src');
+            img.style.display = 'none';
+            video.pause();
+            video.removeAttribute('src');
+            video.style.display = 'none';
         }
 
         function setConnection(online) {
@@ -1726,21 +1825,35 @@
                     else if (action === 'delete') deleteTask(id, t.dataset.name || '', t.dataset.status || '');
                     else if (action === 'rename') openRename(id, t.dataset.name || '');
                     else if (action === 'preview') {
-                        // Lightbox 打开原图；后端 /api/download 已经是原图
+                        // 历史记录里的图片/视频统一走 inline 预览接口；下载按钮仍走 /api/download
                         const fname = t.dataset.name || '';
                         const histId = 'history-' + id;
-                        const orig = `/api/download?task_id=${encodeURIComponent(histId)}&filename=${encodeURIComponent(fname)}`;
-                        openLightbox(orig, fname, orig);
+                        const previewKind = t.dataset.previewKind || 'image';
+                        const previewUrl = `/api/media-preview?task_id=${encodeURIComponent(histId)}`;
+                        const downloadUrl = `/api/download?task_id=${encodeURIComponent(histId)}&filename=${encodeURIComponent(fname)}`;
+                        openLightbox(previewKind, previewUrl, fname, downloadUrl);
                     }
                 }
                 const closer = e.target.closest('[data-close-modal]');
-                if (closer) closeModal(closer.dataset.closeModal);
+                if (closer) {
+                    if (closer.dataset.closeModal === 'lightboxModal') resetLightbox();
+                    closeModal(closer.dataset.closeModal);
+                }
             });
 
             $$('.modal-mask').forEach(mask => {
                 mask.addEventListener('click', (e) => {
-                    if (e.target === mask) mask.classList.remove('show');
+                    if (e.target === mask) {
+                        if (mask.id === 'lightboxModal') resetLightbox();
+                        mask.classList.remove('show');
+                    }
                 });
+            });
+
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && $('#lightboxModal').classList.contains('show')) {
+                    resetLightbox();
+                }
             });
 
             $('#renameSubmit').addEventListener('click', submitRename);
