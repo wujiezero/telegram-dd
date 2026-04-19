@@ -210,6 +210,12 @@
 
         .stat-sub { font-size: 11px; color: var(--text-3); }
 
+        /* 下载速度卡片高亮一下，让"总速度"一眼可见 */
+        .stat-speed { background: var(--accent-soft); border-color: transparent; }
+        .stat-speed .stat-label { color: var(--accent); }
+        .stat-speed .stat-value { color: var(--accent-strong, var(--accent)); }
+        .stat-speed .stat-sub   { color: var(--accent); opacity: 0.75; }
+
         .info-section {
             display: grid;
             grid-template-columns: 1fr;
@@ -332,6 +338,11 @@
             padding: 12px 16px;
             border-bottom: 1px solid var(--line);
             align-items: center;
+        }
+
+        /* 历史列表带批量勾选框——多出一列 28px 给 checkbox，避免挤到下一行 */
+        .row:has(> .row-select) {
+            grid-template-columns: 28px 44px minmax(0, 1fr) auto;
         }
 
         .row:last-child { border-bottom: none; }
@@ -706,17 +717,17 @@
                     <div class="stat">
                         <span class="stat-label">正在下载</span>
                         <span class="stat-value" id="statActive">–</span>
-                        <span class="stat-sub" id="statSpeed">0.00 MB/s</span>
+                        <span class="stat-sub">当前活动任务</span>
+                    </div>
+                    <div class="stat stat-speed">
+                        <span class="stat-label">下载速度</span>
+                        <span class="stat-value" id="statSpeed">0.00 MB/s</span>
+                        <span class="stat-sub" id="statSpeedSub">全部任务合计</span>
                     </div>
                     <div class="stat">
                         <span class="stat-label">队列</span>
                         <span class="stat-value" id="statQueue">–</span>
-                        <span class="stat-sub">待处理</span>
-                    </div>
-                    <div class="stat">
-                        <span class="stat-label">历史任务</span>
-                        <span class="stat-value" id="statTotal">–</span>
-                        <span class="stat-sub">累计</span>
+                        <span class="stat-sub" id="statTotalSub">历史 <span id="statTotal">–</span></span>
                     </div>
                     <div class="stat">
                         <span class="stat-label">运行时长</span>

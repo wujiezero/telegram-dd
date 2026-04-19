@@ -14,26 +14,19 @@ FROM python:3.12-slim AS run-image
 # 只复制安装好的依赖 + 可执行脚本（如果有的话）
 COPY --from=compile-image /install /usr/local
 
-# 以非 root 身份运行：UID/GID 可通过 --build-arg 覆盖，便于和宿主机用户对齐
-ARG APP_UID=1000
-ARG APP_GID=1000
-
-RUN groupadd --system --gid ${APP_GID} tdd \
-    && useradd --system --uid ${APP_UID} --gid ${APP_GID} --home /app --shell /usr/sbin/nologin tdd \
-    && mkdir -p /app /downloads /session /app/db /app/logs \
-    && chown -R tdd:tdd /app /downloads /session
+# 按用户要求：容器以 root 身份运行，便于挂载任意宿主目录。
+# 如需以非 root 重新启用，加回 USER 指令并对挂载目录做 chown。
+RUN mkdir -p /app /downloads /session /app/db /app/logs
 
 WORKDIR /app
-COPY --chown=tdd:tdd *.py ./
-COPY --chown=tdd:tdd templates ./templates
+COPY *.py ./
+COPY templates ./templates
 
 # 声明外部卷：下载区 / session / DB 都可以挂主机目录
 VOLUME ["/downloads", "/session", "/app/db", "/app/logs"]
 
 # 默认暴露 Web UI 端口
 EXPOSE 7373
-
-USER tdd
 
 # 更直观的默认路径，docker-compose 再覆盖也行
 ENV TELEGRAM_DAEMON_DEST=/downloads \

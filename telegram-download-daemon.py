@@ -12,6 +12,7 @@ import string
 import os
 import os.path
 import socket
+import sys
 import threading
 import sqlite3
 import glob
@@ -53,9 +54,6 @@ LOG_FILE = getenv("TELEGRAM_DAEMON_LOG_FILE", "telegram-download-daemon.log")
 LOG_MAX_BYTES = int(getenv("TELEGRAM_DAEMON_LOG_MAX_BYTES", str(5 * 1024 * 1024)))
 LOG_BACKUP_COUNT = int(getenv("TELEGRAM_DAEMON_LOG_BACKUP_COUNT", "5"))
 
-os.makedirs(LOG_DIR, exist_ok=True)
-log_path = os.path.join(LOG_DIR, LOG_FILE)
-
 root_logger = logging.getLogger()
 root_logger.setLevel(LOG_LEVEL)
 root_logger.handlers.clear()
@@ -65,12 +63,38 @@ console_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 console_handler.setLevel(LOG_LEVEL)
 root_logger.addHandler(console_handler)
 
-file_handler = RotatingFileHandler(log_path, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding='utf-8')
-file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
-file_handler.setLevel(LOG_LEVEL)
-root_logger.addHandler(file_handler)
+# 文件日志是"锦上添花"而不是"必需品"——Docker bind-mount 挂出来的宿主目录
+# 可能属 root（UID 0），容器里的非 root 用户（UID 1000）就无权写入。
+# 这里做"失败降级"：目录建不了或文件打不开，就只用 stdout，日志仍能走 Docker logs 通道。
+log_path = os.path.join(LOG_DIR, LOG_FILE)
+_file_log_error = None
+try:
+    os.makedirs(LOG_DIR, exist_ok=True)
+    file_handler = RotatingFileHandler(
+        log_path,
+        maxBytes=LOG_MAX_BYTES,
+        backupCount=LOG_BACKUP_COUNT,
+        encoding='utf-8',
+    )
+    file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    file_handler.setLevel(LOG_LEVEL)
+    root_logger.addHandler(file_handler)
+except (OSError, PermissionError) as e:
+    _file_log_error = e
+    # 还没有 logger 可用，先 stderr 打一条给运维看
+    sys.stderr.write(
+        f"[WARN] Cannot open log file {log_path!r}: {e!s}. "
+        f"Falling back to stdout-only logging. "
+        f"Hint: if you see this in Docker, chown the bind-mounted logs dir to "
+        f"the container UID (default 1000:1000) or set TELEGRAM_DAEMON_LOG_DIR to a writable path.\n"
+    )
 
 logger = logging.getLogger('telegram-download-daemon')
+if _file_log_error is not None:
+    logger.warning(
+        "File logging disabled (%s); running with console handler only.",
+        _file_log_error,
+    )
 
 import multiprocessing
 import argparse

@@ -3,13 +3,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        APP_UID: "${APP_UID:-1000}"
-        APP_GID: "${APP_GID:-1000}"
     container_name: telegram-download
     # read_only 根文件系统；可写位置通过 volumes + tmpfs 限定
     read_only: true
-    user: "${APP_UID:-1000}:${APP_GID:-1000}"
     environment:
       - TELEGRAM_DAEMON_API_ID=
       - TELEGRAM_DAEMON_API_HASH=
@@ -31,6 +27,7 @@ services:
       #- TELEGRAM_DAEMON_PROXY_PASSWORD=your_password
     ports:
       - 7373:7373
+    # 容器以 root 运行（见 Dockerfile）——宿主目录不需要做 chown。
     volumes:
       - ./downloads:/downloads
       - ./sessions:/session
