@@ -3,9 +3,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      no_cache: true
+      args:
+        APP_UID: "${APP_UID:-1000}"
+        APP_GID: "${APP_GID:-1000}"
     container_name: telegram-download
+    # read_only 根文件系统；可写位置通过 volumes + tmpfs 限定
     read_only: true
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
     environment:
       - TELEGRAM_DAEMON_API_ID=
       - TELEGRAM_DAEMON_API_HASH=
@@ -14,6 +18,10 @@ services:
       - TELEGRAM_DAEMON_SESSION_PATH=/session
       - TELEGRAM_DAEMON_WORKERS=2
       - TELEGRAM_DAEMON_PROXY_RESOLVE_ONCE=1
+      # 开启 Web UI 鉴权；留空则为开放访问（老行为）
+      - TELEGRAM_DAEMON_WEB_TOKEN=
+      # 如果通过 HTTPS 反代再暴露，可以把 cookie 的 Secure 打开
+      - TELEGRAM_DAEMON_WEB_COOKIE_SECURE=0
       # Proxy configuration (uncomment and modify if needed)
       #- TELEGRAM_DAEMON_PROXY_HOST=x.x.x.x
       #- TELEGRAM_DAEMON_PROXY_PORT=7890
@@ -27,7 +35,21 @@ services:
       - ./downloads:/downloads
       - ./sessions:/session
       - ./db:/app/db
+      - ./logs:/app/logs
+    tmpfs:
+      - /tmp
+    # 额外硬化选项：禁止新获得特权、最小能力集
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request, sys; r=urllib.request.urlopen('http://127.0.0.1:7373/healthz', timeout=3); sys.exit(0 if r.status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
 volumes:
   downloads:

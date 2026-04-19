@@ -17,8 +17,10 @@ import sqlite3
 import glob
 from mimetypes import guess_extension, guess_type
 import socks
-from flask import Flask, jsonify, render_template_string, request, send_file
-from flask_socketio import SocketIO
+from flask import Flask, jsonify, make_response, render_template_string, request, send_file
+from flask_socketio import SocketIO, disconnect
+import hmac
+import secrets as _secrets
 
 from sessionManager import (
     SingleInstanceLockError,
@@ -28,6 +30,13 @@ from sessionManager import (
     getSession,
     releaseProcessLock,
     saveSession,
+)
+from tdd_utils import (
+    WINDOWS_RESERVED_NAMES as _WINDOWS_RESERVED_NAMES,
+    build_safe_path,
+    ensure_existing_path_within,
+    getRandomId,
+    sanitize_filename,
 )
 
 from telethon import TelegramClient, events, __version__
@@ -542,8 +551,159 @@ def handle_interrupted_tasks():
 app = Flask(__name__)
 app.config['JSON_SORT_KEYS'] = False
 
+# ---------------------------------------------------------------------------
+# Web UI 鉴权 + CSRF 防护
+# ---------------------------------------------------------------------------
+# 主路径：前端把 token 存在 sessionStorage，后续所有 fetch 都走 Authorization: Bearer。
+# 因为浏览器不会跨站自动附带这个 header，没有 ambient credentials 就不存在 CSRF 问题。
+# 同时保留 cookie 路径，方便 curl / 书签访问：用 cookie 时要求同时带 X-TDD-Auth header
+# 来挡住浏览器 CSRF。
+WEB_AUTH_TOKEN = (getenv("TELEGRAM_DAEMON_WEB_TOKEN") or "").strip()
+WEB_AUTH_COOKIE_NAME = "tdd_token"
+WEB_AUTH_COOKIE_MAX_AGE = int(getenv("TELEGRAM_DAEMON_WEB_COOKIE_MAX_AGE", str(30 * 24 * 3600)))
+WEB_AUTH_COOKIE_SECURE = (getenv("TELEGRAM_DAEMON_WEB_COOKIE_SECURE", "").lower() in ("1", "true", "yes"))
+WEB_AUTH_COOKIE_SAMESITE = "Lax"
+WEB_AUTH_PUBLIC_PATHS = {"/healthz", "/api/ui-auth", "/api/ui-auth-status"}
+WEB_CSRF_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+WEB_CSRF_HEADER = "X-TDD-Auth"
+
+
+def web_auth_configured() -> bool:
+    return bool(WEB_AUTH_TOKEN)
+
+
+def _constant_time_eq(a, b) -> bool:
+    if a is None or b is None:
+        return False
+    if not isinstance(a, (bytes, str)) or not isinstance(b, (bytes, str)):
+        return False
+    a_b = a.encode("utf-8") if isinstance(a, str) else a
+    b_b = b.encode("utf-8") if isinstance(b, str) else b
+    return hmac.compare_digest(a_b, b_b)
+
+
+def _get_bearer_token() -> str:
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        return auth_header[7:].strip()
+    return ""
+
+
+def _get_cookie_token() -> str:
+    return request.cookies.get(WEB_AUTH_COOKIE_NAME) or ""
+
+
+def extract_request_token() -> str:
+    """Bearer 优先，其次 cookie，最后 query 参数（给 Socket.IO 降级握手用）。"""
+    return (
+        _get_bearer_token()
+        or _get_cookie_token()
+        or (request.args.get("tdd_token") or "")
+    )
+
+
+def is_request_authenticated() -> bool:
+    if not web_auth_configured():
+        return True
+    return _constant_time_eq(extract_request_token(), WEB_AUTH_TOKEN)
+
+
+@app.before_request
+def _web_auth_gate():
+    """全站鉴权 + CSRF 防护。"""
+    path_ = request.path or "/"
+    if path_ in WEB_AUTH_PUBLIC_PATHS or path_.startswith("/static/"):
+        return None
+    if path_.startswith("/socket.io"):
+        # Socket.IO 握手的鉴权在 @socketio.on("connect") 里处理
+        return None
+
+    if not web_auth_configured():
+        return None  # 未启用鉴权：向后兼容
+
+    # 未登录状态下也允许拿到首页 HTML，让前端渲染登录面板
+    if path_ == "/" and request.method.upper() == "GET":
+        return None
+
+    if not is_request_authenticated():
+        return jsonify({"error": "Unauthorized"}), 401
+
+    if request.method.upper() not in WEB_CSRF_SAFE_METHODS:
+        # 使用 Bearer 的请求天然无 CSRF 风险；cookie-only 的 mutating 请求必须带 X-TDD-Auth
+        if not _get_bearer_token():
+            csrf_value = request.headers.get(WEB_CSRF_HEADER, "")
+            if not _constant_time_eq(csrf_value, WEB_AUTH_TOKEN):
+                return jsonify({"error": "CSRF check failed"}), 403
+    return None
+
+
+@app.route("/healthz", methods=["GET"])
+def _healthz():
+    """健康检查端点，不需要鉴权。"""
+    try:
+        authed = bool(telegram_auth_state.get("authorized"))
+    except Exception:
+        authed = False
+    return jsonify({"ok": True, "telegram_authorized": authed, "version": TDD_VERSION})
+
+
+@app.route("/api/ui-auth-status", methods=["GET"])
+def _ui_auth_status():
+    """供前端知道是否需要登录。"""
+    return jsonify({
+        "auth_required": web_auth_configured(),
+        "authenticated": is_request_authenticated(),
+    })
+
+
+@app.route("/api/ui-auth", methods=["POST"])
+def _ui_auth():
+    """前端提交 token，通过则在响应中 set cookie 方便 curl / 单页刷新回来用。"""
+    if not web_auth_configured():
+        return jsonify({"error": "Web auth is not enabled"}), 400
+    payload = request.get_json(silent=True) or {}
+    token = (payload.get("token") or "").strip()
+    if not _constant_time_eq(token, WEB_AUTH_TOKEN):
+        return jsonify({"error": "Invalid token"}), 401
+    resp = make_response(jsonify({"ok": True}))
+    resp.set_cookie(
+        WEB_AUTH_COOKIE_NAME,
+        token,
+        max_age=WEB_AUTH_COOKIE_MAX_AGE,
+        secure=WEB_AUTH_COOKIE_SECURE,
+        httponly=False,  # 需要 JS 可读以便 fetch 时同步带上 X-TDD-Auth
+        samesite=WEB_AUTH_COOKIE_SAMESITE,
+        path="/",
+    )
+    return resp
+
+
+@app.route("/api/ui-logout", methods=["POST"])
+def _ui_logout():
+    resp = make_response(jsonify({"ok": True}))
+    resp.set_cookie(WEB_AUTH_COOKIE_NAME, "", max_age=0, path="/")
+    return resp
+
+
 # Initialize SocketIO
 socketio = SocketIO(app, cors_allowed_origins="*")
+
+
+@socketio.on("connect")
+def _socketio_on_connect(auth=None):
+    """SocketIO 握手时强制鉴权（仅在配置 token 后生效）。"""
+    if not web_auth_configured():
+        return True
+    token = ""
+    if isinstance(auth, dict):
+        token = (auth.get("token") or "").strip()
+    if not token:
+        token = extract_request_token()
+    if not _constant_time_eq(token, WEB_AUTH_TOKEN):
+        logger.warning("Rejected unauthenticated Socket.IO connection")
+        disconnect()
+        return False
+    return True
 
 # Global variables for Web Server
 start_time = time.time()
@@ -553,6 +713,12 @@ web_queue_items = []
 telegram_user_info = None
 telegram_channel_info = None
 web_retry_scheduler = None
+# 供 /api/cancel 使用：把进行中的 download_task 注册进来，方便 Web UI 取消
+active_download_tasks = {}  # download_id(str) -> asyncio.Task
+# 队列中尚未取走的 item 快照 (download_id(str) -> queue_item)
+active_queue_items_by_id = {}
+web_cancel_scheduler = None
+cancelled_download_ids = set()
 telegram_auth_state = {
     'authorized': False,
     'awaiting_code': False,
@@ -627,17 +793,57 @@ def get_auth_send_code_remaining():
         return 0
     return math.ceil(remaining)
 
+
+# -------- total_tasks 计数缓存 --------
+# emit_status_update / /api/status 以前每次都会跑一次 `SELECT COUNT(*) FROM downloads`。
+# 在并发下载 + WebSocket 广播密集时，这会对 SQLite 造成不必要的压力。
+# 这里改为 TTL 缓存 + 显式失效：
+#   - get_total_tasks_count()：带 TTL 的缓存读取（默认 3 秒），过期或失效才访问 DB
+#   - invalidate_total_tasks_count()：在 INSERT/DELETE downloads 之后调用，强制下一次读取刷新
+_total_tasks_cache_lock = threading.Lock()
+_total_tasks_cache = {
+    'value': None,     # 上次查询到的 count
+    'expires_at': 0.0, # 在这个时间戳之前可以直接复用
+}
+TOTAL_TASKS_CACHE_TTL = float(getenv("TELEGRAM_DAEMON_TOTAL_TASKS_CACHE_TTL", "3.0"))
+
+
+def get_total_tasks_count(force_refresh=False):
+    """获取 downloads 总条数，带 TTL 缓存。失败返回缓存中上次成功的值（没有则 0）。"""
+    now = time.time()
+    with _total_tasks_cache_lock:
+        if (
+            not force_refresh
+            and _total_tasks_cache['value'] is not None
+            and now < _total_tasks_cache['expires_at']
+        ):
+            return _total_tasks_cache['value']
+    # 缓存过期 —— 走一次 DB（不要在锁里做 I/O）
+    try:
+        result = db_execute_query('SELECT COUNT(*) FROM downloads', fetch=True)
+        value = result[0][0] if result else 0
+    except Exception as e:
+        logger.error(f'Error getting total tasks count: {e}', exc_info=True)
+        # 回退到旧缓存值，实在没有就 0
+        with _total_tasks_cache_lock:
+            return _total_tasks_cache['value'] or 0
+    with _total_tasks_cache_lock:
+        _total_tasks_cache['value'] = value
+        _total_tasks_cache['expires_at'] = time.time() + TOTAL_TASKS_CACHE_TTL
+    return value
+
+
+def invalidate_total_tasks_count():
+    """在新增 / 删除记录后调用，让下一次读取强制刷新。"""
+    with _total_tasks_cache_lock:
+        _total_tasks_cache['expires_at'] = 0.0
+
+
 # Function to emit status update event
 def emit_status_update():
     try:
-        # Get total historical tasks count
-        total_tasks = 0
-        try:
-            result = db_execute_query('SELECT COUNT(*) FROM downloads', fetch=True)
-            if result:
-                total_tasks = result[0][0]
-        except Exception as e:
-            logger.error(f'Error getting total tasks count: {e}', exc_info=True)
+        # Get total historical tasks count (TTL 缓存，避免每次广播都 COUNT(*))
+        total_tasks = get_total_tasks_count()
 
         total_download_speed_mbps = 0.0
         for task_info in web_in_progress.values():
@@ -663,10 +869,17 @@ def index():
     # Get proxy info
     proxy_info = None
     if proxy:
+        # 把 PySocks 的数值常量反查回人类可读字符串
+        socks_const_to_name = {
+            socks.SOCKS5: 'socks5',
+            socks.HTTP: 'http',
+        }
         if isinstance(proxy, tuple):
+            raw_type = proxy[0] if len(proxy) > 0 else 'socks5'
+            type_name = socks_const_to_name.get(raw_type, raw_type if isinstance(raw_type, str) else 'socks5')
             # Handle tuple format proxy
             proxy_info = {
-                'type': proxy[0] if len(proxy) > 0 else 'socks5',
+                'type': type_name,
                 'host': proxy_configured_host or (proxy[1] if len(proxy) > 1 else ''),
                 'runtime_host': proxy_runtime_host or (proxy[1] if len(proxy) > 1 else ''),
                 'port': proxy[2] if len(proxy) > 2 else '',
@@ -675,8 +888,10 @@ def index():
             }
         else:
             # Handle dict format proxy
+            raw_type = proxy.get('proxy_type', 'socks5')
+            type_name = socks_const_to_name.get(raw_type, raw_type if isinstance(raw_type, str) else 'socks5')
             proxy_info = {
-                'type': proxy.get('proxy_type', 'socks5'),
+                'type': type_name,
                 'host': proxy.get('addr', ''),
                 'runtime_host': proxy_runtime_host or proxy.get('addr', ''),
                 'port': proxy.get('port', ''),
@@ -691,7 +906,7 @@ def index():
     
     # Read template from file
     template_path = os.path.join(os.path.dirname(__file__), 'templates', 'index.html')
-    with open(template_path, 'r') as f:
+    with open(template_path, 'r', encoding='utf-8') as f:
         template_content = f.read()
     
     return render_template_string(
@@ -794,17 +1009,8 @@ def api_status():
         minutes, seconds = divmod(remainder, 60)
         uptime = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
         
-        # Get total historical tasks count
-        total_tasks = 0
-        try:
-            local_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-            local_cursor = local_conn.cursor()
-            local_cursor.execute('SELECT COUNT(*) FROM downloads')
-            total_tasks = local_cursor.fetchone()[0]
-            local_cursor.close()
-            local_conn.close()
-        except Exception as e:
-            logger.error(f'Error getting total tasks count: {e}', exc_info=True)
+        # Get total historical tasks count (TTL 缓存，避免每次 /api/status 都 COUNT(*))
+        total_tasks = get_total_tasks_count()
 
         total_download_speed_mbps = 0.0
         for task_info in web_in_progress.values():
@@ -841,14 +1047,19 @@ def api_tasks():
             progress = task_info.get('progress', '0 % (0 / 0)')
             size = task_info.get('size', 0)
             source_message_link = task_info.get('source_message_link', '')
+            started_at = task_info.get('started_at')
+            speed_bps = task_info.get('speed_bps', 0.0)
 
             tasks.append({
                 'task_id': str(task_id),
                 'filename': filename,
                 'status': 'downloading',
                 'progress': progress,
-                'downloadTime': time.strftime('%Y-%m-%d %H:%M:%S'),
+                # 用任务首次入 in_progress 时记录的真实开始时间，而不是请求时刻
+                'downloadTime': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(started_at)) if started_at else None,
+                'started_at': started_at,
                 'size': size,
+                'speed_bps': speed_bps,
                 'source_message_link': source_message_link
             })
         
@@ -1012,29 +1223,28 @@ def api_download():
         local_cursor = local_conn.cursor()
         
         # Get file path from database
-        local_cursor.execute('SELECT download_path FROM downloads WHERE id = ?', (actual_task_id,))
+        local_cursor.execute('SELECT download_path, status FROM downloads WHERE id = ?', (actual_task_id,))
         result = local_cursor.fetchone()
-        
-        if not result:
-            local_cursor.close()
-            local_conn.close()
-            return jsonify({'error': 'File not found in database'}), 404
-
-        if not result[0]:
-            local_cursor.close()
-            local_conn.close()
-            return jsonify({'error': 'File is not available for download yet'}), 409
-        
-        file_path = ensure_existing_path_within(downloadFolder, result[0])
-        
-        # Close the local connection
         local_cursor.close()
         local_conn.close()
-        
+
+        if not result:
+            return jsonify({'error': 'File not found in database'}), 404
+
+        download_path_value, status_value = result
+        if not download_path_value:
+            return jsonify({'error': 'File is not available for download yet'}), 409
+
+        # 仅允许下载已完成的文件；否则拉到的可能是 tmp 过程中的残缺文件
+        if status_value != 'completed':
+            return jsonify({'error': f'File is not ready to download (status={status_value})'}), 409
+
+        file_path = ensure_existing_path_within(downloadFolder, download_path_value)
+
         # Check if file exists
         if not os.path.exists(file_path):
             return jsonify({'error': 'File not found on disk'}), 404
-        
+
         # Send the file
         return send_file(file_path, as_attachment=True, download_name=os.path.basename(file_path))
     except Exception as e:
@@ -1075,7 +1285,13 @@ def api_retry():
         if web_retry_scheduler is None:
             return jsonify({'error': 'Retry service is not ready yet'}), 503
 
-        retry_result = web_retry_scheduler(int(source_channel_id), int(source_message_id), resolved_retry_dir)
+        # 复用旧记录（将其状态改回 queued），避免每次重试都产生新的历史行
+        retry_result = web_retry_scheduler(
+            int(source_channel_id),
+            int(source_message_id),
+            resolved_retry_dir,
+            int(actual_task_id),
+        )
         return jsonify({
             'success': True,
             'message': f'Retry queued for {filename}',
@@ -1087,6 +1303,30 @@ def api_retry():
         logger.error(f'API retry error: {e}', exc_info=True)
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/cancel', methods=['POST'])
+def api_cancel():
+    """取消一个队列中的或正在下载的任务。"""
+    try:
+        task_id = request.args.get('task_id', type=str)
+        if not task_id:
+            return jsonify({'error': 'Missing task_id parameter'}), 400
+
+        actual_task_id = task_id.split('-')[-1]
+        if not actual_task_id.isdigit():
+            return jsonify({'error': 'Invalid task_id'}), 400
+
+        if web_cancel_scheduler is None:
+            return jsonify({'error': 'Cancel service is not ready yet'}), 503
+
+        result = web_cancel_scheduler(int(actual_task_id))
+        if not result.get('found'):
+            return jsonify({'error': 'Task is not active (already completed, failed, or never started)'}), 404
+        return jsonify({'success': True, **result})
+    except Exception as e:
+        logger.error(f'API cancel error: {e}', exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/delete', methods=['DELETE'])
 def api_delete():
     try:
@@ -1094,27 +1334,41 @@ def api_delete():
         task_id = request.args.get('task_id', type=str)
         filename = request.args.get('filename', type=str)
         delete_file = request.args.get('delete_file', default='1', type=str) != '0'
-        
+
         if not task_id or not filename:
             return jsonify({'error': 'Missing task_id or filename parameter'}), 400
-        
+
         # Extract actual task id from task_id string (e.g., "history-123" -> "123")
         actual_task_id = task_id.split('-')[-1]
-        
+
+        # 不允许直接删除正在下载 / 排队中的任务，避免把 worker 脚下的地抽掉
+        if actual_task_id in web_in_progress or actual_task_id in active_queue_items_by_id:
+            return jsonify({
+                'error': 'Task is still active. Cancel it first before deleting.',
+            }), 409
+
         # Create a new connection for this request to ensure thread safety
         local_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         local_cursor = local_conn.cursor()
-        
+
         # Get file paths from database
-        local_cursor.execute('SELECT download_path, thumbnail_path, filename FROM downloads WHERE id = ?', (actual_task_id,))
+        local_cursor.execute('SELECT download_path, thumbnail_path, filename, status FROM downloads WHERE id = ?', (actual_task_id,))
         result = local_cursor.fetchone()
-        
+
         if not result:
             local_cursor.close()
             local_conn.close()
             return jsonify({'error': 'File not found in database'}), 404
 
-        download_path, thumbnail_path, stored_filename = result
+        download_path, thumbnail_path, stored_filename, stored_status = result
+
+        # 二次兜底：即使 web_in_progress 没跟上，也拒绝删 downloading / queued
+        if stored_status in ('downloading', 'queued'):
+            local_cursor.close()
+            local_conn.close()
+            return jsonify({
+                'error': f'Task is still active (status={stored_status}). Cancel it first before deleting.',
+            }), 409
 
         if delete_file and download_path:
             file_path = ensure_existing_path_within(downloadFolder, download_path)
@@ -1135,7 +1389,9 @@ def api_delete():
         local_cursor.execute('DELETE FROM downloads WHERE id = ?', (actual_task_id,))
         local_conn.commit()
         logger.info(f'Deleted download record: {actual_task_id}')
-        
+        # 让 total_tasks 缓存下一次读取刷新
+        invalidate_total_tasks_count()
+
         # Close the local connection
         local_cursor.close()
         local_conn.close()
@@ -1396,40 +1652,9 @@ async def log_reply(message: events.NewMessage.Event, reply: str) -> None:
     if message is not None:
         await message.edit(reply)
 
-def getRandomId(length: int) -> str:
-    chars = string.ascii_lowercase + string.digits
-    return ''.join(random.choice(chars) for _ in range(length))
-
-
-def sanitize_filename(filename: str) -> str:
-    filename = (filename or "").replace("\\", "_").replace("/", "_")
-    safe_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-()[]{}!@#$%^&*+=,;:'\" "
-    filename = "".join(c for c in filename if c in safe_chars).strip()
-
-    if not filename or filename in {".", ".."}:
-        return f"file_{getRandomId(8)}"
-
-    name, ext = os.path.splitext(filename)
-    if len(filename) > 255:
-        filename = f"{name[:255-len(ext)]}{ext}"
-
-    return filename
-
-
-def build_safe_path(base_dir: str, *parts: str) -> str:
-    base_dir_abs = os.path.abspath(base_dir)
-    candidate = os.path.abspath(os.path.join(base_dir_abs, *parts))
-    if os.path.commonpath([base_dir_abs, candidate]) != base_dir_abs:
-        raise ValueError(f"Refusing to access path outside base directory: {candidate}")
-    return candidate
-
-
-def ensure_existing_path_within(base_dir: str, target_path: str) -> str:
-    base_dir_abs = os.path.abspath(base_dir)
-    candidate = os.path.abspath(target_path)
-    if os.path.commonpath([base_dir_abs, candidate]) != base_dir_abs:
-        raise ValueError(f"Refusing to access existing path outside base directory: {candidate}")
-    return candidate
+# NOTE: getRandomId / _WINDOWS_RESERVED_NAMES / sanitize_filename /
+# build_safe_path / ensure_existing_path_within 已迁移到 tdd_utils 模块，
+# 便于单元测试。此处保持 import 别名，行为与之前完全一致。
 
 
 def resolve_retry_directory(target_dir: str | None) -> str | None:
@@ -1630,9 +1855,13 @@ try:
                 await target_queue.put(queue_item)
                 target_items.append(queue_item)
                 rebuild_web_queue_items()
+                # 维护 id -> queue_item 索引，便于 /api/cancel 直接定位待取出的 item
+                queue_download_id = queue_item[3] if len(queue_item) > 3 else None
+                if queue_download_id is not None:
+                    active_queue_items_by_id[str(queue_download_id)] = queue_item
                 logger.info(
                     "Queued task id=%s filename=%s queue=%s sizes(photo=%s, video=%s, other=%s)",
-                    queue_item[3] if len(queue_item) > 3 else None,
+                    queue_download_id,
                     getFilename(queue_item[0]),
                     queue_type,
                     photo_queue.qsize(),
@@ -1659,6 +1888,10 @@ try:
                 async with queue_lock:
                     if element in queue_items_list_ref:
                         queue_items_list_ref.remove(element)
+                    # 从"待取出"索引中剔除
+                    element_download_id = element[3] if len(element) > 3 else None
+                    if element_download_id is not None:
+                        active_queue_items_by_id.pop(str(element_download_id), None)
                     rebuild_web_queue_items()
 
                 logger.info(
@@ -1790,15 +2023,15 @@ try:
             
             async with status_lock:
                 global web_in_progress
-                if received >= total:
-                    try: 
+                if total and received >= total:
+                    try:
                         in_progress.pop(str(download_id), None)
                         web_in_progress = in_progress
-                    except: 
+                    except:
                         pass
                     return
-                
-                percentage = math.trunc(received / total * 10000) / 100
+
+                percentage = math.trunc(received / total * 10000) / 100 if total else 0.0
                 progress_message = "{0} % ({1} / {2})".format(percentage, received, total)
                 in_progress[str(download_id)] = {
                     'filename': filename,
@@ -1838,6 +2071,8 @@ try:
                         )
                     )
                     conn.commit()
+                    # 新增一行 —— 让 total_tasks 缓存下一次读取刷新
+                    invalidate_total_tasks_count()
                     return cursor.lastrowid
 
                 cursor.execute(
@@ -1890,11 +2125,18 @@ try:
             emit_status_update()
             return {'queued': True, 'filename': filename, 'message': status_message, 'download_id': download_id}
 
-        async def retry_download_message(source_channel_id, source_message_id, target_dir_override=None):
+        async def retry_download_message(source_channel_id, source_message_id, target_dir_override=None, existing_download_id=None):
             message_obj = await client.get_messages(PeerChannel(source_channel_id), ids=source_message_id)
             if not message_obj:
                 raise ValueError("Unable to locate the original Telegram message")
-            return await enqueue_download_message(message_obj, "{0} re-added to queue", target_dir_override)
+            # 如果传了 existing_download_id，复用旧记录（更新为 queued），避免历史里出现重复条目
+            return await enqueue_download_message(
+                message_obj,
+                "{0} re-added to queue",
+                target_dir_override=target_dir_override,
+                existing_download_id=existing_download_id,
+                recovery_note="Manual retry via web UI" if existing_download_id else None,
+            )
 
         async def restore_pending_downloads():
             async with db_lock:
@@ -1980,15 +2222,92 @@ try:
                 except Exception as monitor_error:
                     logger.error(f"Queue monitor error: {monitor_error}", exc_info=True)
 
-        def schedule_retry(source_channel_id, source_message_id, target_dir_override=None):
+        def schedule_retry(source_channel_id, source_message_id, target_dir_override=None, existing_download_id=None):
             future = asyncio.run_coroutine_threadsafe(
-                retry_download_message(source_channel_id, source_message_id, target_dir_override),
+                retry_download_message(source_channel_id, source_message_id, target_dir_override, existing_download_id),
                 main_loop
             )
             return future.result(timeout=60)
 
-        global web_retry_scheduler
+        async def cancel_download(download_id_int):
+            """取消队列中的 / 进行中的下载任务。
+
+            修复时序竞争：
+            - worker 从 queue 取出 item 后，会先 pop 掉 active_queue_items_by_id（L1962），
+              再做一堆 DB 写入，最后才把真正的 download_task 注册进 active_download_tasks（L2691）。
+            - 在"已从队列取出 但 尚未注册下载任务"这段窗口里，用户点取消会两边都找不到，
+              返回 404，体验很差。
+            - 修复：如果 DB 里这条记录状态仍然是可取消状态（queued/downloading），就把
+              download_id 登记进 cancelled_download_ids 并把状态写回 'cancelled'。
+              worker 在注册下载任务前/后都会检查 cancelled_download_ids，能在那个窗口
+              里让任务立刻 self-cancel。
+            """
+            download_id = int(download_id_int)
+            download_id_str = str(download_id)
+            found_kind = None
+
+            # 先尝试取消队列里的（尚未被 worker 取走的）
+            async with queue_lock:
+                queued_item = active_queue_items_by_id.get(download_id_str)
+                if queued_item is not None:
+                    for bucket in (photo_queue_items, video_queue_items, other_queue_items):
+                        if queued_item in bucket:
+                            try:
+                                bucket.remove(queued_item)
+                            except ValueError:
+                                pass
+                    active_queue_items_by_id.pop(download_id_str, None)
+                    rebuild_web_queue_items()
+                    cancelled_download_ids.add(download_id_str)
+                    async with db_lock:
+                        cursor.execute(
+                            '''UPDATE downloads SET status = 'cancelled', error_message = ?, end_time = CURRENT_TIMESTAMP WHERE id = ?''',
+                            ("Cancelled from web UI before downloading", download_id)
+                        )
+                        conn.commit()
+                    found_kind = 'queued'
+
+            if found_kind is None:
+                # 再尝试取消正在下载的
+                download_task = active_download_tasks.get(download_id_str)
+                if download_task is not None and not download_task.done():
+                    cancelled_download_ids.add(download_id_str)
+                    download_task.cancel()
+                    found_kind = 'downloading'
+
+            if found_kind is None:
+                # 窗口期兜底：既不在队列也没注册下载任务，但 DB 里可能还是
+                # queued/downloading —— 这是 dequeue 与 register_active_task 之间的缝隙。
+                # 直接把 cancel 意图登记进 cancelled_download_ids；worker 一旦注册任务
+                # 就会看到并立即 self-cancel。同时把 DB 标记为 cancelled，UI 立刻正确。
+                async with db_lock:
+                    cursor.execute(
+                        'SELECT status FROM downloads WHERE id = ?', (download_id,)
+                    )
+                    row = cursor.fetchone()
+                    current_status = row[0] if row else None
+                if current_status in ('queued', 'downloading'):
+                    cancelled_download_ids.add(download_id_str)
+                    async with db_lock:
+                        cursor.execute(
+                            '''UPDATE downloads SET status = 'cancelled', error_message = ?, end_time = CURRENT_TIMESTAMP WHERE id = ?''',
+                            ("Cancelled from web UI (in flight)", download_id)
+                        )
+                        conn.commit()
+                    found_kind = 'transitioning'
+                else:
+                    return {'found': False}
+
+            emit_status_update()
+            return {'found': True, 'state': found_kind, 'download_id': download_id}
+
+        def schedule_cancel(download_id_int):
+            future = asyncio.run_coroutine_threadsafe(cancel_download(download_id_int), main_loop)
+            return future.result(timeout=30)
+
+        global web_retry_scheduler, web_cancel_scheduler
         web_retry_scheduler = schedule_retry
+        web_cancel_scheduler = schedule_cancel
         await restore_pending_downloads()
         
         @client.on(events.NewMessage())
@@ -2111,6 +2430,30 @@ try:
                     # Update status after removing from queue
                     emit_status_update()
 
+                    # 时序竞争兜底：用户可能在"已 dequeue 但 worker 尚未注册下载任务"
+                    # 的窗口里点了取消，cancel_download 会把 id 加入 cancelled_download_ids
+                    # 并把 DB 改成 cancelled。这里提前检查，避免白费力气 / 反把状态覆盖回 downloading。
+                    if download_id is not None and str(download_id) in cancelled_download_ids:
+                        logger.info(
+                            f"Worker {worker_id} skip pre-cancelled task: id={download_id}, filename={getFilename(message_obj)}"
+                        )
+                        cancelled_download_ids.discard(str(download_id))
+                        active_download_tasks.pop(str(download_id), None)
+                        # DB 状态应该已经被 cancel_download 改成 cancelled；若仍是 queued，补一把
+                        async with db_lock:
+                            cursor.execute(
+                                '''UPDATE downloads SET status = 'cancelled',
+                                   error_message = COALESCE(error_message, ?),
+                                   end_time = COALESCE(end_time, CURRENT_TIMESTAMP)
+                                   WHERE id = ? AND status IN ('queued','downloading')''',
+                                ("Cancelled by user", download_id)
+                            )
+                            conn.commit()
+                        emit_status_update()
+                        if worker_queue is not None:
+                            worker_queue.task_done()
+                        continue
+
                     filename=getFilename(message_obj)
                     fileName, fileExtension = os.path.splitext(filename)
                     tempfilename=fileName+"-"+getRandomId(8)+fileExtension
@@ -2194,6 +2537,8 @@ try:
                                 )
                             )
                             download_id = cursor.lastrowid
+                            # 新增一行 —— 让 total_tasks 缓存下一次读取刷新
+                            invalidate_total_tasks_count()
                         else:
                             cursor.execute(
                                 '''
@@ -2216,14 +2561,21 @@ try:
                         "Downloading file {0} ({1} bytes) to {2}".format(filename, size, file_category)
                     )
 
-                    # 进度回调函数不能是异步的，所以我们需要使用一个同步的包装器
+                    # 进度回调函数不能是异步的，所以我们需要使用一个同步的包装器。
+                    # 为了避免每个 tick 都写 SQLite + 广播 WS，我们按 **进度变化 >= 1% 或距上次
+                    # 更新 >= 2s** 的节流策略做事。仅当真正推进时才触发 DB 写、WS 广播、Telegram 回复。
                     last_progress_time = [time.time()]
                     last_speed_snapshot = [{'received': 0, 'timestamp': time.time()}]
+                    # 节流快照：[上次写库/广播的 percentage, 上次写库/广播的时间戳]
+                    last_persisted = [-1.0, 0.0]
+                    PROGRESS_MIN_DELTA = 1.0   # %
+                    PROGRESS_MIN_INTERVAL = 2.0  # seconds
                     def download_callback(received, total):
                         # 由于回调是同步的，我们不能直接await异步函数
                         # 但我们可以记录进度，然后在合适的时候更新
                         nonlocal lastUpdate
-                        percentage = math.trunc(received / total * 10000) / 100
+                        # total 可能在媒体元信息缺失时为 0；避免除零异常
+                        percentage = math.trunc(received / total * 10000) / 100 if total else 0.0
                         progress_message = "{0} % ({1} / {2})".format(percentage, received, total)
                         last_progress_time[0] = time.time()
 
@@ -2236,50 +2588,70 @@ try:
                             'received': received,
                             'timestamp': last_progress_time[0],
                         }
-                        
+
+                        # in-memory 状态每次都更新——便宜、无锁竞争，/api/tasks 能读到最新速度
                         with sync_lock:
+                            existing_entry = in_progress.get(str(download_id)) or {}
                             in_progress[str(download_id)] = {
                                 'filename': filename,
                                 'progress': progress_message,
                                 'size': size,
                                 'source_message_link': source_message_link,
                                 'speed_bps': speed_bps,
+                                # 首次出现时记录起始时间；后续刷新保持稳定
+                                'started_at': existing_entry.get('started_at') or time.time(),
+                                'download_id': download_id,
                             }
-                            # 确保全局变量同步
                             global web_in_progress
                             web_in_progress = in_progress
-                            
+
                             currentTime = time.time()
                             if (currentTime - lastUpdate) > updateFrequency:
-                                # 我们不能在这里await，所以我们需要使用loop.create_task
+                                # 对 Telegram 客户端的回复本来就已经有 updateFrequency 节流，保持原样
                                 asyncio.create_task(log_reply(message, progress_message))
                                 lastUpdate = currentTime
-                        
-                        # Update progress in database
+
+                        # 节流：只有在进度推进够多 或 距上次写入够久 时才写 DB + 广播 WS
+                        now = last_progress_time[0]
+                        should_persist = (
+                            percentage >= 100.0 or
+                            percentage - last_persisted[0] >= PROGRESS_MIN_DELTA or
+                            (now - last_persisted[1]) >= PROGRESS_MIN_INTERVAL
+                        )
+                        if not should_persist:
+                            return
+
+                        last_persisted[0] = percentage
+                        last_persisted[1] = now
+
                         if download_id:
-                            with sync_db_lock:
-                                cursor.execute('''
-                                UPDATE downloads SET progress = ? WHERE id = ?
-                                ''', (percentage, download_id))
-                                conn.commit()
-                        
-                        # 每10%记录一次进度（使用整数判断避免浮点精度问题）
+                            try:
+                                with sync_db_lock:
+                                    cursor.execute(
+                                        'UPDATE downloads SET progress = ? WHERE id = ?',
+                                        (percentage, download_id),
+                                    )
+                                    conn.commit()
+                            except Exception as db_exc:
+                                # 写库失败不中断下载，只记录一次
+                                logger.warning(f"Progress DB update failed for id={download_id}: {db_exc}")
+
                         progress_int = int(percentage)
                         if progress_int > 0 and progress_int % 10 == 0 and abs(percentage - progress_int) < 0.01:
                             logger.info(f"Download progress: {filename} - {progress_int}% ({received}/{total} bytes)")
-                        
-                        # Send WebSocket notification for download progress
+
                         socketio.emit('download_progress', {
                             'task_id': download_id,
                             'filename': filename,
                             'progress': percentage,
                             'received': received,
                             'total': total,
-                            'status': 'downloading'
+                            'status': 'downloading',
+                            'speed_bps': speed_bps,
                         })
-                        
-                        # Update status when download starts
-                        if received > 0 and received < total * 0.01:  # 开始下载时
+
+                        # 开始下载时刷新一下总览状态
+                        if received > 0 and total and received < total * 0.01:
                             emit_status_update()
 
                     # 添加超时处理，防止下载卡住
@@ -2301,6 +2673,12 @@ try:
                                 progress_callback = check_start_callback
                             )
                         )
+                        # 注册到全局 active_download_tasks 供 /api/cancel 使用
+                        if download_id is not None:
+                            active_download_tasks[str(download_id)] = download_task
+                            # 如果之前已标记取消（用户在调度前再次点了取消），立刻取消
+                            if str(download_id) in cancelled_download_ids:
+                                download_task.cancel()
                         
                         # 等待下载开始或超时
                         start_time = time.time()
@@ -2366,9 +2744,14 @@ try:
                         conn.commit()
                     logger.info(f"Updated download record: ID={download_id}, Status=completed, Size={actual_size}")
 
+                    # 成功完成后清理取消注册表
+                    if download_id is not None:
+                        active_download_tasks.pop(str(download_id), None)
+                        cancelled_download_ids.discard(str(download_id))
+
                     # Update status after download completes
                     emit_status_update()
-                    
+
                     worker_queue.task_done()
                 except Exception as e:
                     # 捕获所有异常，确保任务不会永久卡住
@@ -2379,7 +2762,37 @@ try:
                             in_progress.pop(str(download_id), None)
                             global web_in_progress
                             web_in_progress = in_progress
-                    
+
+                    # 检查任务是否因为用户主动取消而失败；如果是，直接标记 cancelled，不进入重试逻辑
+                    was_cancelled = False
+                    if download_id is not None and str(download_id) in cancelled_download_ids:
+                        was_cancelled = True
+                        cancelled_download_ids.discard(str(download_id))
+
+                    if was_cancelled:
+                        if download_id:
+                            async with db_lock:
+                                cursor.execute(
+                                    '''
+                                    UPDATE downloads SET status = ?, error_message = ?, end_time = CURRENT_TIMESTAMP WHERE id = ?
+                                    ''',
+                                    ('cancelled', 'Cancelled by user', download_id)
+                                )
+                                conn.commit()
+                            logger.info(f"Download cancelled by user: ID={download_id}, filename={filename}")
+                        # 清理临时文件
+                        with contextlib.suppress(Exception):
+                            temp_file_path = build_safe_path(tempFolder, f"{filename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}")
+                            if os.path.exists(temp_file_path):
+                                os.remove(temp_file_path)
+                        # 清理任务注册表
+                        if download_id is not None:
+                            active_download_tasks.pop(str(download_id), None)
+                        emit_status_update()
+                        if worker_queue is not None:
+                            worker_queue.task_done()
+                        continue
+
                     # 获取当前重试次数
                     current_retry = 0
                     if download_id:
@@ -2388,7 +2801,7 @@ try:
                             result = cursor.fetchone()
                             if result:
                                 current_retry = result[0] or 0
-                    
+
                     # 检查是否可以重试
                     if current_retry < max_retries:
                         # 更新重试次数，状态改回 queued
@@ -2401,10 +2814,10 @@ try:
                                 conn.commit()
                             logger.info(f"Retry {new_retry}/{max_retries} for: {filename}")
                         
-                        # 重新加入队列
+                        # 重新加入队列；保留 5 元素结构，避免 monitor_queue_health / api_tasks 漏掉 queued_at
                         await asyncio.sleep(5)  # 等待5秒后重试
-                        await push_queue_item([message_obj, message, target_dir_override, download_id])
-                        
+                        await push_queue_item([message_obj, message, target_dir_override, download_id, time.time()])
+
                         await log_reply(message, f"⚠️ Retry {new_retry}/{max_retries}: {filename}")
                     else:
                         # 重试次数用完，标记为失败并通知
@@ -2429,7 +2842,10 @@ try:
                     emit_status_update()
                     if worker_queue is not None:
                         worker_queue.task_done()
-        
+                    # 失败/重试分支都清理 active_download_tasks；重试新创建任务时会重新注册
+                    if download_id is not None:
+                        active_download_tasks.pop(str(download_id), None)
+
         tasks = []
         loop = asyncio.get_running_loop()
 

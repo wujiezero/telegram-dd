@@ -1,14 +1,17 @@
-cffi>=1.14.0
-cryptg>=0.3
-pyaes>=1.6.1
-pyasn1>=0.4.8
-pycparser>=2.20
-rsa>=4.7
-Telethon>=1.24.0
-PySocks>=1.7.1
-Flask>=2.0.0
-flask-socketio>=5.5.1
-python-socketio>=5.15.0
-python-engineio>=4.12.3
-simple-websocket>=1.1.0
-Pillow>=10.0.0
+# Locked versions — 指定一个上下界，既保证核心行为稳定，也能拿到安全补丁。
+# 升级时请一起跑 pytest 套件并观察 Docker healthcheck。
+cffi>=1.14.0,<2.0
+cryptg>=0.3,<0.5
+pyaes>=1.6.1,<2.0
+pyasn1>=0.4.8,<0.7
+pycparser>=2.20,<3.0
+rsa>=4.7,<5.0
+# Telethon 1.x 和 2.x 在 API 层有 breaking changes；锁到 1.x 末尾。
+Telethon>=1.36,<2.0
+PySocks>=1.7.1,<2.0
+Flask>=2.3,<4.0
+flask-socketio>=5.5.1,<6.0
+python-socketio>=5.15.0,<6.0
+python-engineio>=4.12.3,<5.0
+simple-websocket>=1.1.0,<2.0
+Pillow>=10.0.0,<12.0

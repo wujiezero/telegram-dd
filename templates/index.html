@@ -1,1293 +1,967 @@
 <!DOCTYPE html>
-<html lang="en">
-
+<html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Telegram DD</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="theme-color" content="#17212b" />
+    <meta name="format-detection" content="telephone=no" />
+    <title>Telegram Download Daemon</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%232ea6e0'/%3E%3Cpath d='M14 31.5l38-13.7c1.8-.6 3.3.5 2.7 2.6l-6.5 29.6c-.5 2-1.7 2.5-3.4 1.6l-9.4-6.8-4.5 4.3c-.5.5-1 .9-1.9.9l.7-9.6 17.9-15.9c.8-.7-.2-1.1-1.2-.5L23.5 34.7l-9.4-3c-2-.6-2.1-2 .4-2.8z' fill='%23fff'/%3E%3C/svg%3E" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+        :root {
+            --bg-0: #0f1720;
+            --bg-1: #17212b;
+            --bg-2: #1f2c38;
+            --bg-3: #2a3a47;
+            --bg-4: #37485a;
+            --line: #24313d;
+            --text-1: #f2f4f6;
+            --text-2: #aab6c3;
+            --text-3: #7a8591;
+            --accent: #2ea6e0;
+            --accent-strong: #1c93cd;
+            --accent-soft: rgba(46, 166, 224, 0.18);
+            --success: #4fd19a;
+            --success-soft: rgba(79, 209, 154, 0.18);
+            --warning: #f6b44d;
+            --warning-soft: rgba(246, 180, 77, 0.18);
+            --danger: #ef5b5b;
+            --danger-soft: rgba(239, 91, 91, 0.18);
+            --purple: #b58cff;
+            --purple-soft: rgba(181, 140, 255, 0.18);
+            --grey-soft: rgba(170, 182, 195, 0.18);
+            --radius-lg: 16px;
+            --radius-md: 12px;
+            --radius-sm: 8px;
+            --safe-top: env(safe-area-inset-top);
+            --safe-bottom: env(safe-area-inset-bottom);
+            --safe-left: env(safe-area-inset-left);
+            --safe-right: env(safe-area-inset-right);
         }
 
-        :root {
-            /* 保持深色背景但略微透明 */
-            --primary-bg: #0d0d0d;
-            --secondary-bg: rgba(28, 28, 30, 0.6);
-            /* 关键：增加透明度 */
-            --card-bg: rgba(44, 44, 46, 0.4);
-            /* 关键：增加透明度 */
-            --text-primary: #ffffff;
-            --text-secondary: #c7c7cc;
-            /* 稍微亮一点 */
-            --accent-blue: #0a84ff;
-            /* iOS 蓝色 */
-            --accent-green: #30d158;
-            /* iOS 绿色 */
-            --accent-yellow: #ffd60a;
-            /* iOS 黄色 */
-            --border-radius: 14px;
-            /* 稍微大一点的圆角 */
-            /* 玻璃效果的关键 */
-            --glass-border: 1px solid rgba(255, 255, 255, 0.18);
-            --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
-            --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        * {
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            background: var(--bg-0);
+            color: var(--text-1);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+            font-size: 15px;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+            -webkit-text-size-adjust: 100%;
+            overscroll-behavior-y: none;
         }
 
         body {
-            /* 更流畅的背景，模拟液态的层次感 */
-            background: radial-gradient(circle at top left, #2c3e50 0%, #0d0d0d 60%);
-            color: var(--text-primary);
-            line-height: 1.45;
-            padding: 14px;
+            min-height: 100vh;
+            min-height: 100dvh;
+            padding-top: var(--safe-top);
+            padding-bottom: calc(var(--safe-bottom) + 16px);
+            padding-left: var(--safe-left);
+            padding-right: var(--safe-right);
         }
 
-        .container {
-            max-width: 1200px;
+        .app-shell {
+            max-width: 1080px;
             margin: 0 auto;
+            padding: 12px;
         }
 
-        header {
-            background-color: var(--secondary-bg);
-            border-radius: var(--border-radius);
-            /* Glassmorphism 核心属性 */
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            box-shadow: var(--glass-shadow);
-            border: var(--glass-border);
-            /* ---------------------- */
-            text-align: center;
-            margin-bottom: 22px;
-            padding: 14px 18px;
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 12px 12px 16px;
         }
 
-        h1 {
-            font-size: 2rem;
-            font-weight: 700;
-            margin-bottom: 6px;
-            background: linear-gradient(135deg, var(--accent-blue), var(--accent-green));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+        .header-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
 
-        .subtitle {
-            color: var(--text-secondary);
-            font-size: 0.95rem;
+        .logo {
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #2ea6e0, #1c93cd);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 12px rgba(46, 166, 224, 0.35);
         }
 
-        /* 统计信息网格 */
+        .logo svg {
+            width: 20px;
+            height: 20px;
+            fill: #fff;
+        }
+
+        .brand-text { line-height: 1.15; }
+        .brand-title { font-size: 16px; font-weight: 600; color: var(--text-1); }
+        .brand-sub { font-size: 12px; color: var(--text-3); }
+
+        .header-actions { display: flex; gap: 8px; align-items: center; }
+
+        .icon-btn {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            background: var(--bg-2);
+            border: 1px solid var(--line);
+            color: var(--text-2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: background 0.15s ease, color 0.15s ease;
+        }
+
+        .icon-btn:active { background: var(--bg-3); color: var(--text-1); }
+
+        @media (hover: hover) {
+            .icon-btn:hover { background: var(--bg-3); color: var(--text-1); }
+        }
+
+        .icon-btn svg { width: 18px; height: 18px; fill: currentColor; }
+
+        .card {
+            background: var(--bg-1);
+            border: 1px solid var(--line);
+            border-radius: var(--radius-lg);
+            margin: 0 0 14px;
+            overflow: hidden;
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .card-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-1);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .card-title .count-pill, .count-pill {
+            font-size: 11px;
+            color: var(--text-2);
+            background: var(--bg-3);
+            border-radius: 999px;
+            padding: 2px 8px;
+            font-weight: 500;
+        }
+
+        .card-body { padding: 12px 16px 16px; }
+        .card-body.flush { padding: 0; }
+
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 10px;
-            margin-bottom: 16px;
         }
 
-        /* 服务状态信息卡片的网格布局 (PC/Tablet) */
-        .status-info-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 10px;
-            margin-top: 8px;
+        @media (min-width: 640px) {
+            .stats-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
         }
 
-        /* 统一卡片样式 */
-        .stat-card,
-        .task-item {
-            background-color: var(--card-bg);
-            border-radius: var(--border-radius);
-            /* Glassmorphism 核心属性 */
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
-            box-shadow: var(--glass-shadow);
-            border: var(--glass-border);
-            /* ---------------------- */
-            transition: var(--transition);
-            padding: 12px 14px;
-            margin-bottom: 10px;
-            /* 统一间距 */
-        }
-
-        /* 悬停效果 */
-        .stat-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 12px 32px 0 rgba(0, 0, 0, 0.5);
+        .stat {
+            background: var(--bg-2);
+            border: 1px solid var(--line);
+            border-radius: var(--radius-md);
+            padding: 12px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            min-width: 0;
         }
 
         .stat-label {
-            color: var(--text-secondary);
-            font-size: 0.75rem;
-            margin-bottom: 4px;
+            font-size: 11px;
+            color: var(--text-3);
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.06em;
         }
 
         .stat-value {
-            font-size: 1.35rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            word-break: break-all;
-            overflow-wrap: break-word;
-        }
-
-        /* Service Status Section 容器 (不使用 Glass 效果，由内部卡片承载) */
-        .status-section {
-            padding: 10px 4px;
-            border-radius: var(--border-radius);
-            margin-bottom: 14px;
-        }
-
-        h2 {
-            font-size: 1.3rem;
+            font-size: 20px;
             font-weight: 600;
-            margin-bottom: 12px;
-            color: var(--text-primary);
+            color: var(--text-1);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
-        /* Proxy and Telegram Account Cards (继承 stat-card 基础样式) */
-        .proxy-info,
-        .telegram-user,
-        .auth-card {
-            /* 覆盖基础样式，使用更柔和的背景色和强调边框 */
-            padding: 12px;
-            margin: 0;
-            border-left: 4px solid;
-            /* 使用 accent 颜色 */
-        }
+        .stat-sub { font-size: 11px; color: var(--text-3); }
 
-        .proxy-info {
-            background-color: rgba(0, 122, 255, 0.15);
-            border-color: var(--accent-blue);
-        }
-
-        .proxy-info h3 {
-            color: var(--accent-blue);
-            margin-bottom: 6px;
-        }
-
-        .telegram-user {
-            background-color: rgba(52, 199, 89, 0.15);
-            border-color: var(--accent-green);
-        }
-
-        .telegram-user h3 {
-            color: var(--accent-green);
-            margin-bottom: 6px;
-        }
-
-        .auth-card {
-            background-color: rgba(255, 214, 10, 0.12);
-            border-color: var(--accent-yellow);
-        }
-
-        .auth-card h3 {
-            color: var(--accent-yellow);
-            margin-bottom: 6px;
-        }
-
-        .proxy-info p,
-        .telegram-user p,
-        .auth-card p {
-            margin: 3px 0;
-            font-size: 0.85rem;
-            color: var(--text-secondary);
-        }
-
-        .auth-form {
+        .info-section {
             display: grid;
-            gap: 8px;
-            margin-top: 10px;
+            grid-template-columns: 1fr;
+            gap: 12px;
         }
 
-        .auth-form input {
-            width: 100%;
-            padding: 8px 10px;
-            border-radius: 8px;
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            background-color: rgba(255, 255, 255, 0.08);
-            color: var(--text-primary);
+        @media (min-width: 720px) {
+            .info-section { grid-template-columns: 1fr 1fr; }
         }
 
-        .auth-actions {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
+        .info-block {
+            background: var(--bg-2);
+            border: 1px solid var(--line);
+            border-radius: var(--radius-md);
+            padding: 14px 14px;
         }
 
-        .auth-btn {
-            padding: 7px 11px;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
+        .info-block h4 {
+            margin: 0 0 8px;
+            font-size: 13px;
             font-weight: 600;
-            font-size: 0.85rem;
+            color: var(--text-2);
         }
 
-        .auth-btn:disabled {
-            cursor: not-allowed;
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 8px;
+            padding: 6px 0;
+            font-size: 13px;
+            border-bottom: 1px dashed var(--line);
+        }
+
+        .info-row:last-child { border-bottom: none; }
+        .info-row .k { color: var(--text-3); }
+        .info-row .v {
+            color: var(--text-1);
+            overflow-wrap: anywhere;
+            text-align: right;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 4px;
+            padding: 8px;
+            background: var(--bg-1);
+            border: 1px solid var(--line);
+            border-radius: var(--radius-lg);
+            margin-bottom: 14px;
+            overflow-x: auto;
+            scrollbar-width: none;
+        }
+        .tabs::-webkit-scrollbar { display: none; }
+
+        .tab {
+            flex: 1;
+            min-width: 90px;
+            padding: 10px 12px;
+            border-radius: var(--radius-md);
+            background: transparent;
+            color: var(--text-2);
+            border: none;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            text-align: center;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        .tab.active { background: var(--accent-soft); color: var(--accent); }
+
+        .filters {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--line);
+            background: var(--bg-1);
+        }
+
+        .search-input, .select {
+            background: var(--bg-2);
+            border: 1px solid var(--line);
+            color: var(--text-1);
+            padding: 10px 12px;
+            border-radius: var(--radius-md);
+            font-size: 16px;
+            outline: none;
+            min-height: 44px;
+            box-sizing: border-box;
+        }
+
+        .search-input { flex: 1 1 180px; min-width: 0; }
+        .search-input::placeholder { color: var(--text-3); }
+
+        .search-input:focus, .select:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px var(--accent-soft);
+        }
+
+        .select {
+            -webkit-appearance: none;
+            appearance: none;
+            padding-right: 28px;
+            background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'><path fill='%23aab6c3' d='M5 8l5 5 5-5z'/></svg>");
+            background-repeat: no-repeat;
+            background-position: right 8px center;
+            background-size: 16px;
+            flex: 0 1 auto;
+            max-width: 160px;
+        }
+
+        .list { list-style: none; margin: 0; padding: 0; }
+
+        .row {
+            display: grid;
+            grid-template-columns: 44px minmax(0, 1fr) auto;
+            gap: 12px;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--line);
+            align-items: center;
+        }
+
+        .row:last-child { border-bottom: none; }
+
+        .row-thumb {
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
+            background: var(--bg-3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-2);
+            overflow: hidden;
+            flex-shrink: 0;
+        }
+
+        .row-thumb img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .row-thumb svg { width: 22px; height: 22px; fill: currentColor; }
+
+        .row-main {
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .row-name {
+            font-size: 14px;
+            color: var(--text-1);
+            font-weight: 500;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .row-meta {
+            font-size: 12px;
+            color: var(--text-3);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px 10px;
+            align-items: center;
+        }
+
+        .row-meta .sep {
+            width: 3px;
+            height: 3px;
+            border-radius: 50%;
+            background: var(--text-3);
             opacity: 0.6;
         }
 
-        .auth-btn-primary {
-            background-color: var(--accent-blue);
-            color: white;
+        .row-right {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 6px;
+            flex-shrink: 0;
         }
 
-        .auth-btn-secondary {
-            background-color: rgba(255, 255, 255, 0.12);
-            color: var(--text-primary);
-        }
-
-        .auth-message {
-            margin-top: 8px;
-            font-size: 0.82rem;
-            color: var(--text-secondary);
-        }
-
-        .auth-badge {
+        .badge {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            margin-top: 6px;
-            padding: 4px 8px;
-            border-radius: 999px;
-            font-size: 0.76rem;
-            font-weight: 600;
-        }
-
-        .auth-badge-ready {
-            background-color: rgba(48, 209, 88, 0.16);
-            color: var(--accent-green);
-        }
-
-        .auth-badge-waiting {
-            background-color: rgba(255, 214, 10, 0.16);
-            color: var(--accent-yellow);
-        }
-
-        .telegram-user-name {
-            color: var(--text-primary);
-            font-weight: 600;
-        }
-
-        .telegram-user-secondary {
-            color: var(--text-secondary);
-            font-size: 0.92rem;
-        }
-
-        .channel-card {
-            background-color: rgba(94, 92, 230, 0.14);
-            border-color: #7d7aff;
-        }
-
-        .channel-card h3 {
-            color: #a8a5ff;
-            margin-bottom: 6px;
-        }
-
-        .channel-name {
-            color: var(--text-primary);
-            font-weight: 600;
-            font-size: 0.95rem;
-            word-break: break-word;
-        }
-
-        .channel-meta {
-            color: var(--text-secondary);
-            font-size: 0.82rem;
-            margin-top: 3px;
-            word-break: break-all;
-        }
-
-        .screen-overlay {
-            position: fixed;
-            inset: 0;
-            display: none;
-            align-items: center;
-            justify-content: center;
-            background: rgba(5, 8, 12, 0.72);
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
-            z-index: 9999;
-        }
-
-        .screen-overlay.is-visible {
-            display: flex;
-        }
-
-        .screen-overlay-card {
-            min-width: 260px;
-            max-width: 420px;
-            padding: 24px 28px;
-            text-align: center;
-            background-color: rgba(28, 28, 30, 0.82);
-            border-radius: var(--border-radius);
-            box-shadow: var(--glass-shadow);
-            border: var(--glass-border);
-        }
-
-        .screen-overlay-spinner {
-            width: 42px;
-            height: 42px;
-            margin: 0 auto 14px;
-            border-radius: 50%;
-            border: 4px solid rgba(255, 255, 255, 0.18);
-            border-top-color: var(--accent-blue);
-            animation: overlay-spin 0.8s linear infinite;
-        }
-
-        .screen-overlay-text {
-            color: var(--text-primary);
-            font-size: 1rem;
-            font-weight: 600;
-        }
-
-        .modal-backdrop {
-            position: fixed;
-            inset: 0;
-            display: none;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-            background: rgba(5, 8, 12, 0.78);
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            z-index: 10000;
-        }
-
-        .modal-backdrop.is-visible {
-            display: flex;
-        }
-
-        .modal-card {
-            width: min(560px, 100%);
-            background: linear-gradient(180deg, rgba(34, 36, 44, 0.95), rgba(22, 24, 31, 0.92));
-            border: var(--glass-border);
-            box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
-            border-radius: 22px;
-            padding: 26px;
-        }
-
-        .modal-title {
-            font-size: 1.3rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            margin-bottom: 8px;
-        }
-
-        .modal-description {
-            color: var(--text-secondary);
-            font-size: 0.96rem;
-            margin-bottom: 18px;
-        }
-
-        .modal-field-label {
-            display: block;
-            margin-bottom: 8px;
-            color: var(--text-primary);
-            font-weight: 600;
-        }
-
-        .modal-input {
-            width: 100%;
-            padding: 14px 16px;
-            border-radius: 14px;
-            border: 1px solid rgba(255, 255, 255, 0.14);
-            background: rgba(255, 255, 255, 0.08);
-            color: var(--text-primary);
-            font-size: 1rem;
-            outline: none;
-            transition: var(--transition);
-        }
-
-        .modal-input:focus {
-            border-color: rgba(10, 132, 255, 0.7);
-            box-shadow: 0 0 0 4px rgba(10, 132, 255, 0.14);
-        }
-
-        .modal-hint {
-            margin-top: 10px;
-            color: var(--text-secondary);
-            font-size: 0.9rem;
-        }
-
-        .modal-option {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-top: 14px;
-            padding: 10px 12px;
-            border-radius: 12px;
-            background: rgba(255, 255, 255, 0.05);
-            color: var(--text-secondary);
-            font-size: 0.9rem;
-        }
-
-        .modal-option input {
-            width: 16px;
-            height: 16px;
-            accent-color: var(--accent-blue);
-        }
-
-        .modal-actions {
-            display: flex;
-            justify-content: flex-end;
-            gap: 12px;
-            margin-top: 22px;
-        }
-
-        .modal-btn {
-            min-width: 108px;
-            padding: 11px 16px;
-            border: none;
-            border-radius: 12px;
-            cursor: pointer;
-            font-weight: 600;
-            transition: var(--transition);
-        }
-
-        .modal-btn-secondary {
-            background: rgba(255, 255, 255, 0.1);
-            color: var(--text-primary);
-        }
-
-        .modal-btn-primary {
-            background: linear-gradient(135deg, var(--accent-blue), #41b0ff);
-            color: white;
-            box-shadow: 0 12px 30px rgba(10, 132, 255, 0.28);
-        }
-
-        .modal-btn:hover {
-            transform: translateY(-1px);
-        }
-
-        @keyframes overlay-spin {
-            from {
-                transform: rotate(0deg);
-            }
-            to {
-                transform: rotate(360deg);
-            }
-        }
-
-        /* --- Filter Controls --- */
-
-        .filter-controls {
-            margin-bottom: 12px;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            align-items: flex-end;
-            /* PC 端：确保过滤器和按钮底部对齐 */
-        }
-
-        /* PC 端：调整按钮组的父容器，使其靠右对齐 */
-        .filter-controls>div[style*="margin-left: auto"] {
-            display: flex;
-            gap: 8px;
-            align-items: flex-end;
-            margin-left: auto;
-            padding-bottom: 2px;
-        }
-
-        .filter-group {
-            display: flex;
-            flex-direction: column;
             gap: 4px;
-        }
-
-        .filter-group label {
-            color: var(--text-secondary);
-            font-size: 0.78rem;
-        }
-
-        /* 增强表单元素，使其融入玻璃卡片 */
-        .filter-group input,
-        .filter-group select {
-            background-color: rgba(255, 255, 255, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            color: var(--text-primary);
-            padding: 7px 10px;
-            border-radius: 8px;
-            font-size: 0.9rem;
-            min-width: 170px;
-        }
-
-        /* 统一所有 filter-controls 内部 button 的基本样式 */
-        .filter-controls button {
-            padding: 7px 12px;
-            border: none;
-            border-radius: 8px;
-            font-size: 0.88rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: var(--transition);
-        }
-
-        #reset-filter {
-            background-color: rgba(255, 255, 255, 0.1);
-            color: var(--text-primary);
-            border: 1px solid rgba(255, 255, 255, 0.15);
-        }
-
-        #reset-filter:hover {
-            background-color: rgba(255, 255, 255, 0.2);
-            transform: translateY(-2px);
-        }
-
-        #apply-filter {
-            background-color: var(--accent-green);
-            color: white;
-            box-shadow: 0 4px 6px rgba(52, 199, 89, 0.4);
-        }
-
-        .task-table-header,
-        .task-row-summary {
-            display: grid;
-            grid-template-columns: 38px minmax(0, 2.2fr) minmax(78px, 0.75fr) minmax(92px, 0.9fr) minmax(84px, 0.8fr) minmax(130px, 1fr) minmax(120px, 1fr) auto;
-            gap: 8px;
-            align-items: center;
-        }
-
-        .task-table-header {
-            padding: 0 10px 6px;
-            color: var(--text-secondary);
-            font-size: 0.72rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-        }
-
-        .task-list {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-        }
-
-        .task-item {
-            padding: 8px 10px;
-            border-left: 3px solid var(--accent-blue);
-        }
-
-        .task-item:hover {
-            transform: translateX(2px);
-            box-shadow: var(--glass-shadow);
-        }
-
-        .task-summary-cell {
-            min-width: 0;
-            font-size: 0.74rem;
-            color: var(--text-secondary);
-        }
-
-        .task-name {
-            font-weight: 600;
-            font-size: 0.84rem;
-            line-height: 1.2;
-            color: var(--text-primary);
-            min-width: 0;
-            word-break: break-word;
-        }
-
-        .task-name-wrap {
-            min-width: 0;
-        }
-
-        .task-name-sub {
-            font-size: 0.68rem;
-            color: var(--text-secondary);
-            margin-top: 2px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .task-toggle {
-            width: 26px;
-            height: 26px;
-            border-radius: 8px;
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            background: rgba(255, 255, 255, 0.06);
-            color: var(--text-secondary);
-            cursor: pointer;
-            font-size: 0.8rem;
-            line-height: 1;
-        }
-
-        .task-toggle:disabled {
-            cursor: default;
-            opacity: 0.45;
-        }
-
-        .task-toggle.is-open {
-            color: var(--text-primary);
-            border-color: rgba(10, 132, 255, 0.4);
-        }
-
-        .task-status {
+            font-size: 11px;
+            font-weight: 500;
             padding: 3px 8px;
             border-radius: 999px;
-            font-size: 0.74rem;
-            font-weight: 600;
+            background: var(--grey-soft);
+            color: var(--text-2);
             white-space: nowrap;
         }
 
-        .status-downloading {
-            background-color: rgba(0, 122, 255, 0.2);
-            color: var(--accent-blue);
-        }
+        .badge.downloading { background: var(--accent-soft); color: var(--accent); }
+        .badge.queued { background: var(--purple-soft); color: var(--purple); }
+        .badge.completed { background: var(--success-soft); color: var(--success); }
+        .badge.failed { background: var(--danger-soft); color: var(--danger); }
+        .badge.cancelled { background: var(--grey-soft); color: var(--text-2); }
+        .badge.ignored { background: var(--warning-soft); color: var(--warning); }
 
-        .status-queued {
-            background-color: rgba(255, 204, 0, 0.2);
-            color: var(--accent-yellow);
-        }
-
-        .status-completed {
-            background-color: rgba(52, 199, 89, 0.2);
-            color: var(--accent-green);
-        }
-
-        .task-progress {
-            font-size: 0.72rem;
-            color: var(--text-secondary);
-            min-width: 0;
-        }
-
-        .progress-bar-container {
-            background-color: rgba(255, 255, 255, 0.1);
-            border-radius: 8px;
+        .progress {
+            width: 100%;
             height: 4px;
-            margin-top: 3px;
+            background: var(--bg-3);
+            border-radius: 999px;
             overflow: hidden;
+            margin-top: 4px;
         }
 
-        .progress-bar {
-            background-color: var(--accent-green);
+        .progress > span {
+            display: block;
             height: 100%;
-            border-radius: 8px;
+            background: linear-gradient(90deg, var(--accent), var(--accent-strong));
+            border-radius: 999px;
             transition: width 0.3s ease;
         }
 
-        .task-actions {
+        .progress.indeterminate > span {
+            width: 40% !important;
+            animation: slide 1.4s ease-in-out infinite;
+        }
+
+        @keyframes slide {
+            0% { margin-left: -40%; }
+            100% { margin-left: 100%; }
+        }
+
+        .row-actions {
+            grid-column: 1 / -1;
             display: flex;
             gap: 6px;
+            padding-top: 10px;
             flex-wrap: wrap;
-            justify-content: flex-end;
         }
 
-        .task-btn {
-            padding: 4px 8px;
-            border: none;
-            border-radius: 6px;
-            font-size: 0.72rem;
-            font-weight: 600;
+        .btn {
+            min-height: 36px;
+            padding: 7px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--line);
+            background: var(--bg-2);
+            color: var(--text-1);
+            font-size: 13px;
             cursor: pointer;
-            transition: var(--transition);
-            text-decoration: none;
-            display: inline-block;
-            text-align: center;
-        }
-
-        .download-btn {
-            background-color: var(--accent-blue);
-            color: white;
-        }
-
-        .delete-btn {
-            background-color: #ff3b30;
-            color: white;
-        }
-
-        .rename-btn {
-            background-color: #ff9500;
-            color: white;
-        }
-
-        .retry-btn {
-            background-color: #30d158;
-            color: white;
-        }
-
-        .task-thumbnail {
-            flex-shrink: 0;
-            align-self: flex-start;
-        }
-
-        .task-thumbnail-image,
-        .task-thumbnail-placeholder {
-            width: 30px;
-            height: 30px;
-            border-radius: 6px;
-            background: rgba(255, 255, 255, 0.1);
-        }
-
-        .task-thumbnail-image {
-            object-fit: cover;
-        }
-
-        .task-thumbnail-placeholder {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            font-size: 0.82rem;
-        }
-
-        .task-details {
-            margin-top: 4px;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 4px 6px;
-            padding: 8px 10px 2px 38px;
-            border-top: 1px solid rgba(255, 255, 255, 0.08);
-        }
-
-        .task-detail {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            word-break: break-word;
-        }
-
-        .task-detail strong {
-            color: var(--text-primary);
-        }
-
-        .task-detail-chip {
             display: inline-flex;
             align-items: center;
-            gap: 4px;
-            padding: 2px 6px;
-            border-radius: 999px;
-            background: rgba(255, 255, 255, 0.06);
+            gap: 6px;
+            transition: background 0.15s, transform 0.1s;
+            text-decoration: none;
         }
 
-        .task-detail-block {
-            width: 100%;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+        .btn:active { background: var(--bg-3); transform: scale(0.97); }
+
+        @media (hover: hover) {
+            .btn:hover { background: var(--bg-3); }
         }
 
-        .task-detail-thumbnail {
+        .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+        .btn.primary:active, .btn.primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
+
+        .btn.danger { color: var(--danger); }
+        .btn.danger:active, .btn.danger:hover { background: var(--danger-soft); }
+
+        .btn.success { color: var(--success); }
+        .btn.success:active, .btn.success:hover { background: var(--success-soft); }
+
+        .btn.warning { color: var(--warning); }
+        .btn.warning:active, .btn.warning:hover { background: var(--warning-soft); }
+
+        .btn[disabled] { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
+
+        .btn-lg {
+            min-height: 44px;
+            padding: 10px 16px;
+            font-size: 15px;
+        }
+
+        .btn-block { width: 100%; justify-content: center; }
+
+        .pager {
             display: flex;
             align-items: center;
+            justify-content: space-between;
             gap: 8px;
+            padding: 12px 16px;
+            border-top: 1px solid var(--line);
+            flex-wrap: wrap;
         }
 
-        .task-empty-toggle {
-            width: 26px;
-            height: 26px;
+        .pager-info { font-size: 12px; color: var(--text-3); }
+        .pager-nav { display: flex; gap: 6px; }
+
+        .empty {
+            padding: 40px 20px;
+            text-align: center;
+            color: var(--text-3);
         }
 
-        .task-link {
-            color: var(--accent-blue);
-            text-decoration: none;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            max-width: 100%;
-            display: inline-block;
+        .empty svg {
+            width: 48px;
+            height: 48px;
+            fill: var(--bg-4);
+            margin-bottom: 8px;
         }
 
-        .task-link:hover {
-            text-decoration: underline;
-        }
-
-        .status-failed {
-            background-color: rgba(255, 69, 58, 0.2);
-            color: #ff453a;
-        }
-
-        .status-interrupted {
-            background-color: rgba(191, 90, 242, 0.2);
-            color: #bf5af2;
-        }
-
-        .task-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        .toast-container {
+        .toast-stack {
             position: fixed;
-            top: 20px;
-            right: 20px;
+            bottom: calc(16px + var(--safe-bottom));
+            left: 16px;
+            right: 16px;
+            z-index: 100;
             display: flex;
             flex-direction: column;
-            gap: 10px;
-            z-index: 9999;
+            gap: 8px;
+            pointer-events: none;
+            align-items: center;
         }
 
         .toast {
-            min-width: 240px;
-            max-width: 360px;
-            padding: 10px 12px;
-            border-radius: 10px;
-            color: var(--text-primary);
-            background: rgba(20, 20, 22, 0.92);
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            box-shadow: var(--glass-shadow);
+            background: var(--bg-2);
+            border: 1px solid var(--line);
+            color: var(--text-1);
+            padding: 10px 14px;
+            border-radius: var(--radius-md);
+            font-size: 14px;
+            max-width: 420px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+            pointer-events: auto;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            opacity: 0;
+            transform: translateY(10px);
+            transition: opacity 0.2s, transform 0.2s;
         }
 
-        .toast-error {
-            border-color: rgba(255, 69, 58, 0.5);
+        .toast.show { opacity: 1; transform: translateY(0); }
+        .toast.success { border-color: rgba(79, 209, 154, 0.4); }
+        .toast.error { border-color: rgba(239, 91, 91, 0.4); }
+        .toast.info { border-color: rgba(46, 166, 224, 0.4); }
+
+        .modal-mask {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.55);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+            display: none;
+            align-items: flex-end;
+            justify-content: center;
+            z-index: 90;
+            padding: 0;
         }
 
-        .toast-success {
-            border-color: rgba(48, 209, 88, 0.5);
+        .modal-mask.show { display: flex; }
+
+        @media (min-width: 640px) {
+            .modal-mask { align-items: center; padding: 16px; }
         }
 
-        /* --- 响应式调整 (Mobile Optimization) --- */
-
-        @media (max-width: 768px) {
-            body {
-                padding: 10px;
-            }
-
-            h1 {
-                font-size: 2rem;
-            }
-
-            /* 统计卡片在小屏上改为单列 */
-            .stats-grid {
-                grid-template-columns: 1fr;
-                gap: 10px;
-            }
-
-            /* 服务状态信息卡片在小屏上改为单列 */
-            .status-info-grid {
-                grid-template-columns: 1fr;
-                gap: 10px;
-            }
-
-            /* 过滤器优化：垂直堆叠并拉伸 */
-            .filter-controls {
-                flex-direction: column;
-                align-items: stretch;
-                gap: 8px;
-                margin-bottom: 10px;
-            }
-
-            /* 覆盖 PC 端的按钮容器样式，确保其 100% 宽度 */
-            .filter-controls>div[style*="margin-left: auto"] {
-                margin-left: 0 !important;
-                width: 100%;
-                display: flex;
-                gap: 10px;
-                /* 关键：确保按钮垂直对齐 */
-                align-items: center;
-                padding-bottom: 0 !important;
-            }
-
-            /* 按钮优化：等分宽度并增加点击区域 */
-            .filter-controls button {
-                flex-grow: 1;
-                padding: 9px 12px;
-                font-size: 0.9rem;
-            }
-
-            .filter-group input,
-            .filter-group select {
-                min-width: auto;
-                width: 100%;
-                padding: 8px 10px;
-            }
-
-            .task-table-header {
-                display: none;
-            }
-
-            .task-item {
-                padding: 9px 10px;
-            }
-
-            .task-row-summary {
-                grid-template-columns: 32px minmax(0, 1fr);
-                gap: 8px;
-                align-items: flex-start;
-            }
-
-            .task-summary-mobile {
-                display: grid;
-                gap: 6px;
-                min-width: 0;
-            }
-
-            .task-summary-mobile-top {
-                display: flex;
-                justify-content: space-between;
-                align-items: flex-start;
-                gap: 8px;
-            }
-
-            .task-summary-mobile-meta {
-                display: flex;
-                flex-wrap: wrap;
-                gap: 4px 8px;
-                font-size: 0.7rem;
-                color: var(--text-secondary);
-            }
-
-            .task-actions {
-                flex-direction: column;
-                gap: 5px;
-                justify-content: flex-start;
-            }
-
-            .task-btn {
-                width: 100%;
-                padding: 8px 10px;
-                font-size: 0.9rem;
-            }
-
-            /* 分页器优化：垂直堆叠 */
-            .pagination {
-                flex-direction: column;
-                gap: 10px;
-                align-items: stretch;
-            }
-
-            .task-details {
-                padding-left: 0;
-            }
+        .modal {
+            background: var(--bg-1);
+            border: 1px solid var(--line);
+            border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+            width: 100%;
+            max-width: 480px;
+            max-height: 92vh;
+            overflow-y: auto;
+            padding-bottom: var(--safe-bottom);
+            -webkit-overflow-scrolling: touch;
         }
 
-        @media (max-width: 480px) {
-            h1 {
-                font-size: 1.8rem;
-            }
-
-            .stat-value {
-                font-size: 1.2rem;
-            }
-
-            h2 {
-                font-size: 1.2rem;
-            }
+        @media (min-width: 640px) {
+            .modal { border-radius: var(--radius-lg); }
         }
 
-        .empty-state {
-            text-align: center;
-            padding: 24px;
-            color: var(--text-secondary);
-            font-style: italic;
-        }
-
-        /* Pagination */
-        .pagination {
-            margin-top: 12px;
+        .modal-header {
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--line);
             display: flex;
             justify-content: space-between;
             align-items: center;
-            gap: 10px;
-            font-size: 0.82rem;
         }
 
-        .pagination button {
-            padding: 5px 9px;
-            background-color: var(--card-bg);
-            color: var(--text-primary);
-            border: 1px solid var(--text-secondary);
-            border-radius: 6px;
-            font-size: 0.8rem;
-            cursor: pointer;
-            transition: var(--transition);
+        .modal-title { font-size: 15px; font-weight: 600; }
+        .modal-body { padding: 16px; }
+        .modal-footer {
+            padding: 12px 16px calc(12px + var(--safe-bottom));
+            border-top: 1px solid var(--line);
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+            flex-wrap: wrap;
         }
 
-        .pagination button:disabled {
-            opacity: 0.5;
-            pointer-events: none;
+        .field {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-bottom: 14px;
         }
 
-        .pagination .page-btn {
-            margin: 0 2px;
+        .field label { font-size: 13px; color: var(--text-2); }
+
+        .field input, .field textarea {
+            background: var(--bg-2);
+            border: 1px solid var(--line);
+            color: var(--text-1);
+            padding: 10px 12px;
+            border-radius: var(--radius-md);
+            font-size: 16px;
+            outline: none;
+            min-height: 44px;
         }
 
-        .pagination .page-btn.active {
-            background-color: var(--accent-blue);
-            color: white;
-            border: none;
+        .field input:focus, .field textarea:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px var(--accent-soft);
         }
+
+        .auth-gate { padding: 16px; }
+        .auth-gate .info-block + .info-block { margin-top: 12px; }
+
+        .footer-note {
+            text-align: center;
+            color: var(--text-3);
+            font-size: 12px;
+            padding: 4px 0 8px;
+        }
+
+        .conn-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--text-3);
+            padding: 4px 8px;
+            border-radius: 999px;
+            background: var(--bg-2);
+            border: 1px solid var(--line);
+        }
+
+        .conn-indicator .led {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--text-3);
+        }
+
+        .conn-indicator.online .led {
+            background: var(--success);
+            box-shadow: 0 0 6px var(--success);
+        }
+
+        .conn-indicator.offline .led { background: var(--danger); }
+
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 999px; }
+        ::-webkit-scrollbar-track { background: transparent; }
     </style>
 </head>
-
 <body>
-    <div class="container">
-        <header>
-            <h1>Telegram Download Daemon</h1>
-            <p class="subtitle">Monitor your downloads and service status</p>
+    <div class="app-shell">
+        <header class="header">
+            <div class="header-brand">
+                <div class="logo" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><path d="M21.5 3.5 2.5 11c-.8.3-.8 1.1 0 1.4l4.7 1.5 1.8 5.6c.2.7 1 .9 1.5.3l2.5-2.6 4.8 3.5c.7.5 1.6.1 1.8-.7l3.3-14.6c.2-.9-.8-1.7-1.4-1.3Z"/></svg>
+                </div>
+                <div class="brand-text">
+                    <div class="brand-title">Telegram DD</div>
+                    <div class="brand-sub">v{{ version }} · Download daemon</div>
+                </div>
+            </div>
+            <div class="header-actions">
+                <span id="connIndicator" class="conn-indicator offline"><span class="led"></span><span id="connLabel">离线</span></span>
+                <button class="icon-btn" id="btnRefresh" title="刷新" aria-label="刷新">
+                    <svg viewBox="0 0 24 24"><path d="M17.65 6.35A8 8 0 1 0 19.86 15H17a6 6 0 1 1-1.58-6.58L13 11h7V4l-2.35 2.35Z"/></svg>
+                </button>
+            </div>
         </header>
 
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-label">Uptime</div>
-                <div class="stat-value" id="uptime">Loading...</div>
+        <section class="card">
+            <div class="card-body">
+                <div class="stats-grid">
+                    <div class="stat">
+                        <span class="stat-label">正在下载</span>
+                        <span class="stat-value" id="statActive">–</span>
+                        <span class="stat-sub" id="statSpeed">0.00 MB/s</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">队列</span>
+                        <span class="stat-value" id="statQueue">–</span>
+                        <span class="stat-sub">待处理</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">历史任务</span>
+                        <span class="stat-value" id="statTotal">–</span>
+                        <span class="stat-sub">累计</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">运行时长</span>
+                        <span class="stat-value" id="statUptime">–</span>
+                        <span class="stat-sub">session uptime</span>
+                    </div>
+                </div>
             </div>
-            <div class="stat-card">
-                <div class="stat-label">Active Downloads</div>
-                <div class="stat-value" id="active-downloads">0</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Queue Size</div>
-                <div class="stat-value" id="queue-size">0</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Version</div>
-                <div class="stat-value">v{{ version }}</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Total Tasks</div>
-                <div class="stat-value" id="total-tasks">0</div>
-            </div>
-        </div>
+        </section>
 
-        <div class="status-section">
-            <h2>Service Status</h2>
-            <div class="status-info-grid">
-                <div class="proxy-info stat-card">
-                    <h3>Proxy Configuration</h3>
-                    {% if proxy %}
-                    <p><strong>Type:</strong> {{ proxy.type }}</p>
-                    <p><strong>Address:</strong> {{ proxy.host }}:{{ proxy.port }}</p>
-                    {% if proxy.resolved_once and proxy.runtime_host and proxy.runtime_host != proxy.host %}
-                    <p><strong>Pinned IP:</strong> {{ proxy.runtime_host }}</p>
-                    {% endif %}
-                    {% if proxy.username %}
-                    <p><strong>Username:</strong> {{ proxy.username }}</p>
-                    {% endif %}
-                    {% else %}
-                    <p>No proxy configured</p>
-                    {% endif %}
+        <section class="card" id="authCard" style="display:none">
+            <div class="card-header">
+                <div class="card-title">Telegram 登录</div>
+                <span class="badge" id="authBadge">未登录</span>
+            </div>
+            <div class="auth-gate">
+                <div class="info-block">
+                    <p id="authMessage" style="margin:0 0 10px;color:var(--text-2);">请使用手机号登录 Telegram 账号。</p>
+                    <div class="field">
+                        <label for="authPhone">手机号（含国家码，例如 +8613800000000）</label>
+                        <input id="authPhone" type="tel" autocomplete="tel" placeholder="+86..." />
+                    </div>
+                    <button id="authSendBtn" class="btn primary btn-lg btn-block">发送验证码</button>
                 </div>
 
-                <div class="telegram-user stat-card">
-                    <h3>Telegram Account</h3>
-                    <div id="telegram-user-panel">
+                <div class="info-block" id="authCodeBlock" style="display:none">
+                    <div class="field">
+                        <label for="authCode">Telegram 收到的验证码</label>
+                        <input id="authCode" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="5 位数字" />
+                    </div>
+                    <button id="authVerifyBtn" class="btn primary btn-lg btn-block">验证登录</button>
+                </div>
+
+                <div class="info-block" id="authPwdBlock" style="display:none">
+                    <div class="field">
+                        <label for="authPassword">两步验证密码</label>
+                        <input id="authPassword" type="password" autocomplete="current-password" placeholder="您的 2FA 密码" />
+                    </div>
+                    <button id="authPwdBtn" class="btn primary btn-lg btn-block">提交</button>
+                </div>
+            </div>
+        </section>
+
+        <section class="card">
+            <div class="card-header">
+                <div class="card-title">运行信息</div>
+            </div>
+            <div class="card-body">
+                <div class="info-section">
+                    <div class="info-block">
+                        <h4>代理</h4>
+                        {% if proxy %}
+                        <div class="info-row"><span class="k">类型</span><span class="v">{{ proxy.type }}</span></div>
+                        <div class="info-row"><span class="k">地址</span><span class="v">{{ proxy.host }}:{{ proxy.port }}</span></div>
+                        {% if proxy.resolved_once and proxy.runtime_host and proxy.runtime_host != proxy.host %}
+                        <div class="info-row"><span class="k">固定出口</span><span class="v">{{ proxy.runtime_host }}</span></div>
+                        {% endif %}
+                        {% if proxy.username %}
+                        <div class="info-row"><span class="k">用户名</span><span class="v">{{ proxy.username }}</span></div>
+                        {% endif %}
+                        {% else %}
+                        <div class="info-row"><span class="k">状态</span><span class="v">未配置代理</span></div>
+                        {% endif %}
+                    </div>
+                    <div class="info-block">
+                        <h4>Telegram 账号</h4>
                         {% if telegram_user %}
-                        <p class="telegram-user-name">{{ telegram_user.first_name }} {{ telegram_user.last_name }}</p>
+                        <div class="info-row"><span class="k">姓名</span><span class="v">{{ telegram_user.first_name }} {{ telegram_user.last_name }}</span></div>
                         {% if telegram_user.username %}
-                        <p class="telegram-user-secondary">@{{ telegram_user.username }}</p>
+                        <div class="info-row"><span class="k">用户名</span><span class="v">@{{ telegram_user.username }}</span></div>
+                        {% endif %}
+                        {% if telegram_user.phone %}
+                        <div class="info-row"><span class="k">手机号</span><span class="v">{{ telegram_user.phone }}</span></div>
                         {% endif %}
                         {% else %}
-                        <p>Not logged in</p>
+                        <div class="info-row"><span class="k">状态</span><span class="v">尚未登录</span></div>
                         {% endif %}
-                    </div>
-                </div>
-
-                <div class="channel-card stat-card">
-                    <h3>Target Channel</h3>
-                    <div id="channel-panel">
-                        <p class="channel-name">Loading channel...</p>
-                        <p class="channel-meta" id="channel-id">ID: Loading...</p>
-                    </div>
-                </div>
-
-                <div class="auth-card stat-card">
-                    <h3>Telegram Login</h3>
-                    <div id="auth-panel">
-                        {% if auth_state.authorized %}
-                        <div class="auth-badge auth-badge-ready">Authorized</div>
-                        <p class="auth-message">{{ auth_state.message }}</p>
-                        {% else %}
-                        <div class="auth-badge auth-badge-waiting">Login Required</div>
-                        <p class="auth-message">{{ auth_state.message }}</p>
-                        {% endif %}
+                        <div class="info-row"><span class="k">频道</span><span class="v" id="infoChannel">–</span></div>
                     </div>
                 </div>
             </div>
+        </section>
+
+        <div class="tabs" role="tablist">
+            <button class="tab active" data-tab="active" role="tab">进行中 <span id="tabActiveCount" class="count-pill">0</span></button>
+            <button class="tab" data-tab="history" role="tab">历史</button>
         </div>
 
-        <div class="status-section">
-            <h2>Download Tasks</h2>
+        <section class="card" id="tabActive">
+            <div class="card-header">
+                <div class="card-title">当前任务 <span class="count-pill" id="activeTotal">0</span></div>
+            </div>
+            <div class="card-body flush">
+                <ul class="list" id="activeList">
+                    <li class="empty"><svg viewBox="0 0 24 24"><path d="M12 3C6.48 3 2 7.48 2 13h2a8 8 0 1 1 8 8v2c5.52 0 10-4.48 10-10S17.52 3 12 3Zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H11Z"/></svg><div>暂无正在进行的下载</div></li>
+                </ul>
+            </div>
+        </section>
 
-            <div class="filter-controls">
-                <div class="filter-group">
-                    <label>Filename</label>
-                    <input type="text" id="filename-filter" placeholder="Search filename...">
-                </div>
-
-                <div class="filter-group">
-                    <label>File Type</label>
-                    <select id="filetype-filter">
-                        <option value="all">All Types</option>
-                        <option value="Music">Music</option>
-                        <option value="Videos">Videos</option>
-                        <option value="Pictures">Pictures</option>
-                        <option value="Archives">Archives</option>
-                        <option value="Documents">Documents</option>
-                        <option value="Books">Books</option>
-                        <option value="DEBPackages">DEB Packages</option>
-                        <option value="Programs">Programs</option>
-                        <option value="RPMPackages">RPM Packages</option>
-                        <option value="Mac">Mac</option>
-                        <option value="Linux">Linux</option>
-                        <option value="Android">Android</option>
-                        <option value="Other">Other</option>
-                    </select>
-                </div>
-
-                <div class="filter-group">
-                    <label>Status</label>
-                    <select id="status-filter">
-                        <option value="all">All Status</option>
-                        <option value="downloading">Downloading</option>
-                        <option value="queued">Queued</option>
-                        <option value="completed">Completed</option>
-                        <option value="failed">Failed</option>
-                        <option value="interrupted">Interrupted</option>
-                    </select>
-                </div>
-
-                <div class="filter-group">
-                    <label>Items per page</label>
-                    <select id="items-per-page">
-                        <option value="10">10</option>
-                        <option value="25">25</option>
-                        <option value="50">50</option>
-                        <option value="100">100</option>
-                    </select>
-                </div>
-
-                <div style="margin-left: auto; display: flex; gap: 10px; align-items: flex-end;">
-                    <button id="reset-filter">Reset</button>
-                    <button id="apply-filter">Apply</button>
+        <section class="card" id="tabHistory" style="display:none">
+            <div class="card-header">
+                <div class="card-title">下载历史 <span class="count-pill" id="historyTotal">0</span></div>
+            </div>
+            <div class="filters">
+                <input class="search-input" id="searchInput" type="search" placeholder="搜索文件名..." />
+                <select class="select" id="filterType">
+                    <option value="">全部类型</option>
+                    <option value="Videos">视频</option>
+                    <option value="Pictures">图片</option>
+                    <option value="Music">音乐</option>
+                    <option value="Documents">文档</option>
+                    <option value="Archives">压缩包</option>
+                    <option value="Books">电子书</option>
+                    <option value="Programs">程序</option>
+                    <option value="DEBPackages">DEB</option>
+                    <option value="RPMPackages">RPM</option>
+                    <option value="Android">Android</option>
+                    <option value="Mac">Mac</option>
+                    <option value="Linux">Linux</option>
+                </select>
+                <select class="select" id="filterStatus">
+                    <option value="">全部状态</option>
+                    <option value="completed">已完成</option>
+                    <option value="downloading">下载中</option>
+                    <option value="queued">排队中</option>
+                    <option value="failed">失败</option>
+                    <option value="cancelled">已取消</option>
+                    <option value="ignored">已忽略</option>
+                </select>
+                <select class="select" id="sortBy">
+                    <option value="start_time|desc">最新优先</option>
+                    <option value="start_time|asc">最早优先</option>
+                    <option value="size|desc">体积大→小</option>
+                    <option value="size|asc">体积小→大</option>
+                    <option value="filename|asc">文件名 A→Z</option>
+                    <option value="filename|desc">文件名 Z→A</option>
+                </select>
+            </div>
+            <!-- 批量操作工具条：有勾选时才显示 -->
+            <div class="filters" id="batchBar" style="display:none; align-items:center; gap:12px; flex-wrap:wrap">
+                <label style="display:inline-flex; align-items:center; gap:6px">
+                    <input type="checkbox" id="batchSelectAll" />
+                    <span>全选本页</span>
+                </label>
+                <span class="badge" id="batchSelectedCount">已选 0 项</span>
+                <div style="margin-left:auto; display:flex; gap:8px">
+                    <button class="btn danger" id="batchDeleteBtn">批量删除</button>
+                    <button class="btn" id="batchClearBtn">清空选择</button>
                 </div>
             </div>
-
-            <div class="task-table-header">
-                <div></div>
-                <div>Name</div>
-                <div>Type</div>
-                <div>Status</div>
-                <div>Size</div>
-                <div>Time</div>
-                <div>Progress</div>
-                <div>Actions</div>
+            <div class="card-body flush">
+                <ul class="list" id="historyList"></ul>
             </div>
-            <div class="task-list" id="task-list">
-                <div class="empty-state">Loading tasks...</div>
+            <div class="pager">
+                <div class="pager-info" id="pagerInfo">–</div>
+                <div class="pager-nav" style="display:flex; gap:8px; align-items:center">
+                    <label style="display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:13px">
+                        每页
+                        <select class="select" id="perPageSelect" style="min-width:auto; padding:4px 8px">
+                            <option value="10">10</option>
+                            <option value="20">20</option>
+                            <option value="50">50</option>
+                            <option value="100">100</option>
+                        </select>
+                        条
+                    </label>
+                    <button class="btn" id="pagePrev">上一页</button>
+                    <button class="btn" id="pageNext">下一页</button>
+                </div>
             </div>
+        </section>
 
-            <div class="pagination">
-                <div>
-                    Showing <span id="showing-start">1</span> to <span id="showing-end">0</span> of <span
-                        id="total-items">0</span> items
+        <div class="footer-note">Telegram Download Daemon · Web UI</div>
+    </div>
+
+    <div class="modal-mask" id="renameModal" role="dialog" aria-modal="true">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">重命名</div>
+                <button class="icon-btn" data-close-modal="renameModal" aria-label="关闭">
+                    <svg viewBox="0 0 24 24"><path d="M18.3 5.71 12 12.01l-6.3-6.3-1.42 1.41 6.3 6.3-6.3 6.3 1.42 1.42 6.3-6.3 6.3 6.3 1.42-1.42-6.3-6.3 6.3-6.3z"/></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="field">
+                    <label for="renameInput">新的文件名（缺失扩展名时会自动补齐）</label>
+                    <input id="renameInput" type="text" />
                 </div>
-                <div style="display: flex; gap: 10px; align-items: center;">
-                    <button id="prev-page" disabled>Previous</button>
-                    <div id="page-buttons" style="display: flex; gap: 5px;">
-                        </div>
-                    <button id="next-page" disabled>Next</button>
-                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" data-close-modal="renameModal">取消</button>
+                <button class="btn primary" id="renameSubmit">重命名</button>
             </div>
         </div>
     </div>
 
-    <div id="toast-container" class="toast-container"></div>
-    <div id="screen-overlay" class="screen-overlay" aria-hidden="true">
-        <div class="screen-overlay-card">
-            <div class="screen-overlay-spinner"></div>
-            <div id="screen-overlay-text" class="screen-overlay-text">Sending verification code...</div>
-        </div>
-    </div>
-    <div id="retry-modal" class="modal-backdrop" aria-hidden="true">
-        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="retry-modal-title">
-            <div class="modal-title" id="retry-modal-title">Retry Download</div>
-            <div class="modal-description" id="retry-modal-description"></div>
-            <label class="modal-field-label" for="retry-modal-input">Target directory</label>
-            <input id="retry-modal-input" class="modal-input" type="text" autocomplete="off">
-            <div class="modal-hint">分类和文件名规则会沿用当前系统逻辑，这里只修改本次重试的目标目录。</div>
-            <div class="modal-actions">
-                <button id="retry-modal-cancel" class="modal-btn modal-btn-secondary" type="button">Cancel</button>
-                <button id="retry-modal-confirm" class="modal-btn modal-btn-primary" type="button">Confirm Retry</button>
+    <!-- 通用确认 Modal：替代原生 confirm() -->
+    <div class="modal-mask" id="confirmModal" role="dialog" aria-modal="true">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title" id="confirmTitle">确认</div>
+                <button class="icon-btn" data-close-modal="confirmModal" aria-label="关闭">
+                    <svg viewBox="0 0 24 24"><path d="M18.3 5.71 12 12.01l-6.3-6.3-1.42 1.41 6.3 6.3-6.3 6.3 1.42 1.42 6.3-6.3 6.3 6.3 1.42-1.42-6.3-6.3 6.3-6.3z"/></svg>
+                </button>
             </div>
-        </div>
-    </div>
-    <div id="action-modal" class="modal-backdrop" aria-hidden="true">
-        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="action-modal-title">
-            <div class="modal-title" id="action-modal-title"></div>
-            <div class="modal-description" id="action-modal-description"></div>
-            <div id="action-modal-field">
-                <label class="modal-field-label" id="action-modal-label" for="action-modal-input"></label>
-                <input id="action-modal-input" class="modal-input" type="text" autocomplete="off">
-                <div id="action-modal-hint" class="modal-hint"></div>
+            <div class="modal-body">
+                <div id="confirmMessage" style="white-space:pre-wrap; line-height:1.55"></div>
+                <label id="confirmExtraLabel" class="field" style="display:none; margin-top:12px; align-items:center; gap:8px; flex-direction:row">
+                    <input type="checkbox" id="confirmExtraCheckbox" />
+                    <span id="confirmExtraText"></span>
+                </label>
             </div>
-            <label id="action-modal-option" class="modal-option">
-                <input id="action-modal-checkbox" type="checkbox">
-                <span id="action-modal-option-text"></span>
-            </label>
-            <div class="modal-actions">
-                <button id="action-modal-cancel" class="modal-btn modal-btn-secondary" type="button">Cancel</button>
-                <button id="action-modal-confirm" class="modal-btn modal-btn-primary" type="button"></button>
+            <div class="modal-footer">
+                <button class="btn" id="confirmCancelBtn" data-close-modal="confirmModal">取消</button>
+                <button class="btn primary" id="confirmOkBtn">确定</button>
             </div>
         </div>
     </div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.0/socket.io.min.js"></script>
+    <!-- 图片预览 Lightbox -->
+    <div class="modal-mask" id="lightboxModal" role="dialog" aria-modal="true" style="background:rgba(0,0,0,.85)">
+        <div class="modal" style="background:transparent; box-shadow:none; max-width:min(94vw,1200px); width:auto">
+            <div class="modal-header" style="background:transparent; border-bottom:none; padding:8px 12px">
+                <div class="modal-title" id="lightboxTitle" style="color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap"></div>
+                <button class="icon-btn" data-close-modal="lightboxModal" aria-label="关闭" style="color:#fff">
+                    <svg viewBox="0 0 24 24"><path d="M18.3 5.71 12 12.01l-6.3-6.3-1.42 1.41 6.3 6.3-6.3 6.3 1.42 1.42 6.3-6.3 6.3 6.3 1.42-1.42-6.3-6.3 6.3-6.3z"/></svg>
+                </button>
+            </div>
+            <div class="modal-body" style="padding:0; display:flex; align-items:center; justify-content:center; min-height:60vh">
+                <img id="lightboxImg" alt="" style="max-width:100%; max-height:80vh; display:block; border-radius:6px" />
+            </div>
+            <div class="modal-footer" style="background:transparent; border-top:none; justify-content:space-between">
+                <a class="btn" id="lightboxDownload" href="#" target="_blank" rel="noreferrer">下载原图</a>
+                <button class="btn" data-close-modal="lightboxModal">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast-stack" id="toastStack"></div>
 
     <script>
-        // File Type Categorization Rules
-        const fileTypeRules = {
-            'IGNORE': ['part', 'desktop'],
-            'Music': ['mp3', 'aac', 'flac', 'ogg', 'wma', 'm4a', 'aiff', 'wav', 'amr'],
-            'Videos': ['flv', 'ogv', 'avi', 'mp4', 'mpg', 'mpeg', '3gp', 'mkv', 'ts', 'webm', 'vob', 'wmv', 'srt'],
-            'Pictures': ['png', 'jpeg', 'gif', 'jpg', 'bmp', 'svg', 'webp', 'psd', 'tiff'],
-            'Archives': ['rar', 'zip', '7z', 'gz', 'bz2', 'tar', 'tgz', 'xz', 'iso', 'cpio'],
-            'Documents': ['txt', 'pdf', 'doc', 'docx', 'odf', 'xls', 'xlsv', 'xlsx', 'ppt', 'pptx', 'ppsx', 'odp', 'odt', 'ods', 'md', 'json', 'csv'],
-            'Books': ['mobi', 'epub', 'chm'],
-            'DEBPackages': ['deb'],
-            'Programs': ['exe', 'msi'],
-            'RPMPackages': ['rpm'],
-            'Mac': ['dmg', 'pkg'],
-            'Linux': ['sh', 'rpm', 'deb'],
-            'Android': ['apk']
-        };
+    (function() {
+        "use strict";
 
-        // Function to format file size
-        function formatFileSize(bytes) {
-            if (bytes === undefined || bytes === null || bytes === 0) {
-                return '0 KB';
-            }
-
-            const kilobyte = 1024;
-            const megabyte = kilobyte * 1024;
-            const gigabyte = megabyte * 1024;
-
-            if (bytes >= gigabyte) {
-                return (bytes / gigabyte).toFixed(2) + ' GB';
-            } else if (bytes >= megabyte) {
-                return (bytes / megabyte).toFixed(2) + ' MB';
-            } else {
-                return (bytes / kilobyte).toFixed(2) + ' KB';
-            }
-        }
-
-        async function apiRequest(url, options = {}) {
-            const response = await fetch(url, options);
-            const data = await response.json().catch(() => ({}));
-            if (!response.ok) {
-                const error = new Error(data.error || 'Request failed');
-                error.status = response.status;
-                error.payload = data;
-                throw error;
-            }
-            return data;
-        }
-
-        function showToast(message, type = 'success') {
-            const container = document.getElementById('toast-container');
-            const toast = document.createElement('div');
-            toast.className = `toast toast-${type}`;
-            toast.textContent = message;
-            container.appendChild(toast);
-            window.setTimeout(() => {
-                toast.remove();
-            }, 4000);
-        }
-
-        let authState = {
+        const authBootstrap = {
             authorized: {{ 'true' if auth_state.authorized else 'false' }},
             awaiting_code: {{ 'true' if auth_state.awaiting_code else 'false' }},
             requires_password: {{ 'true' if auth_state.requires_password else 'false' }},
@@ -1295,1213 +969,797 @@
             resend_available_in: {{ auth_state.resend_available_in|default(0)|int }},
             message: {{ auth_state.message|tojson }}
         };
-        let telegramUser = {{ telegram_user|tojson if telegram_user else 'null' }};
-        let telegramChannel = null;
-        let sendCodeCooldownUntil = 0;
-        let sendCodeCooldownTimer = null;
-        let overlayVisible = false;
-        let retryModalState = null;
-        let actionModalState = null;
-        let authDraft = {
-            phone: authState.phone || '',
-            code: '',
-            password: ''
+
+        const state = {
+            authorized: !!authBootstrap.authorized,
+            tab: 'active',
+            activeTasks: [],
+            history: [],
+            page: 1,
+            perPage: 10,
+            pages: 1,
+            total: 0,
+            filters: { filename: '', file_type: '', status: '', sort_by: 'start_time', sort_dir: 'desc' },
+            socketConnected: false
         };
 
-        function showScreenOverlay(message = 'Sending verification code...') {
-            overlayVisible = true;
-            const overlay = document.getElementById('screen-overlay');
-            const text = document.getElementById('screen-overlay-text');
-            text.textContent = message;
-            overlay.classList.add('is-visible');
-            overlay.setAttribute('aria-hidden', 'false');
-            updateAuthPanelDynamicState();
+        const $ = (s, r=document) => r.querySelector(s);
+        const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+
+        function escapeHtml(text) {
+            if (text == null) return '';
+            return String(text)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
         }
 
-        function hideScreenOverlay() {
-            overlayVisible = false;
-            const overlay = document.getElementById('screen-overlay');
-            overlay.classList.remove('is-visible');
-            overlay.setAttribute('aria-hidden', 'true');
-            updateAuthPanelDynamicState();
+        function formatBytes(bytes) {
+            if (!bytes && bytes !== 0) return '–';
+            if (bytes === 0) return '0 B';
+            const units = ['B','KB','MB','GB','TB'];
+            const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+            return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 2) + ' ' + units[i];
         }
 
-        function renderTelegramUserPanel() {
-            const panel = document.getElementById('telegram-user-panel');
-            if (!panel) {
-                return;
-            }
-
-            panel.innerHTML = '';
-
-            if (!telegramUser) {
-                const placeholder = document.createElement('p');
-                placeholder.textContent = 'Not logged in';
-                panel.appendChild(placeholder);
-                return;
-            }
-
-            const name = document.createElement('p');
-            name.className = 'telegram-user-name';
-            name.textContent = [telegramUser.first_name, telegramUser.last_name].filter(Boolean).join(' ') || telegramUser.username || 'Authorized';
-            panel.appendChild(name);
-
-            if (telegramUser.username) {
-                const username = document.createElement('p');
-                username.className = 'telegram-user-secondary';
-                username.textContent = `@${telegramUser.username}`;
-                panel.appendChild(username);
-            }
+        function formatSpeed(bps) {
+            if (!bps || bps <= 0) return '';
+            const mbps = bps / (1024 * 1024);
+            if (mbps >= 1) return mbps.toFixed(2) + ' MB/s';
+            return (bps / 1024).toFixed(1) + ' KB/s';
         }
 
-        function renderChannelPanel() {
-            const panel = document.getElementById('channel-panel');
-            if (!panel) {
-                return;
-            }
-
-            panel.innerHTML = '';
-
-            const channelName = document.createElement('p');
-            channelName.className = 'channel-name';
-            channelName.textContent = telegramChannel?.title || 'Unknown Channel';
-            panel.appendChild(channelName);
-
-            if (telegramChannel?.username) {
-                const username = document.createElement('p');
-                username.className = 'channel-meta';
-                username.textContent = `@${telegramChannel.username}`;
-                panel.appendChild(username);
-            }
-
-            const channelId = document.createElement('p');
-            channelId.className = 'channel-meta';
-            channelId.id = 'channel-id';
-            channelId.textContent = `ID: ${telegramChannel?.id ?? 'Loading...'}`;
-            panel.appendChild(channelId);
+        function formatDate(iso) {
+            if (!iso) return '–';
+            const d = new Date(iso.includes('T') ? iso : iso.replace(' ', 'T') + 'Z');
+            if (isNaN(d.getTime())) return iso;
+            const pad = (n) => String(n).padStart(2, '0');
+            return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
         }
 
-        function openRetryModal(task) {
-            const modal = document.getElementById('retry-modal');
-            const description = document.getElementById('retry-modal-description');
-            const input = document.getElementById('retry-modal-input');
-            const preferredDirectory = task.targetDir || task.downloadDirectory || '';
-
-            retryModalState = { task };
-            description.textContent = `Choose where "${task.filename}" should be downloaded this time.`;
-            input.value = preferredDirectory;
-            modal.classList.add('is-visible');
-            modal.setAttribute('aria-hidden', 'false');
-            window.setTimeout(() => {
-                input.focus();
-                input.select();
-            }, 0);
+        function parseProgress(p) {
+            if (typeof p === 'number') return p;
+            if (!p) return 0;
+            const m = /(\d+(?:\.\d+)?)\s*%/.exec(String(p));
+            return m ? parseFloat(m[1]) : 0;
         }
 
-        function closeRetryModal() {
-            const modal = document.getElementById('retry-modal');
-            modal.classList.remove('is-visible');
-            modal.setAttribute('aria-hidden', 'true');
-            retryModalState = null;
-        }
-
-        function openActionModal(config) {
-            const modal = document.getElementById('action-modal');
-            const title = document.getElementById('action-modal-title');
-            const description = document.getElementById('action-modal-description');
-            const field = document.getElementById('action-modal-field');
-            const label = document.getElementById('action-modal-label');
-            const input = document.getElementById('action-modal-input');
-            const hint = document.getElementById('action-modal-hint');
-            const confirm = document.getElementById('action-modal-confirm');
-            const option = document.getElementById('action-modal-option');
-            const optionCheckbox = document.getElementById('action-modal-checkbox');
-            const optionText = document.getElementById('action-modal-option-text');
-
-            actionModalState = config;
-            title.textContent = config.title || '';
-            description.textContent = config.description || '';
-            confirm.textContent = config.confirmText || 'Confirm';
-
-            if (config.input) {
-                field.style.display = 'block';
-                label.textContent = config.input.label || '';
-                input.value = config.input.value || '';
-                input.placeholder = config.input.placeholder || '';
-                hint.textContent = config.input.hint || '';
-                window.setTimeout(() => {
-                    input.focus();
-                    input.select();
-                }, 0);
-            } else {
-                field.style.display = 'none';
-                input.value = '';
-                input.placeholder = '';
-                hint.textContent = '';
-            }
-
-            if (config.option) {
-                option.style.display = 'flex';
-                optionCheckbox.checked = Boolean(config.option.checked);
-                optionText.textContent = config.option.label || '';
-            } else {
-                option.style.display = 'none';
-                optionCheckbox.checked = false;
-                optionText.textContent = '';
-            }
-
-            modal.classList.add('is-visible');
-            modal.setAttribute('aria-hidden', 'false');
-        }
-
-        function closeActionModal() {
-            const modal = document.getElementById('action-modal');
-            modal.classList.remove('is-visible');
-            modal.setAttribute('aria-hidden', 'true');
-            actionModalState = null;
-        }
-
-        async function confirmActionModal() {
-            if (!actionModalState?.onConfirm) {
-                return;
-            }
-
-            const value = actionModalState.input
-                ? (document.getElementById('action-modal-input')?.value || '')
-                : '';
-            const checked = document.getElementById('action-modal-checkbox')?.checked || false;
-            await actionModalState.onConfirm(value, checked);
-        }
-
-        async function confirmRetryModal() {
-            if (!retryModalState?.task) {
-                return;
-            }
-
-            const task = retryModalState.task;
-            const retryDirectory = (document.getElementById('retry-modal-input')?.value || '').trim();
-            if (!retryDirectory) {
-                showToast('Retry directory cannot be empty', 'error');
-                return;
-            }
-
-            try {
-                const result = await apiRequest(
-                    `/api/retry?task_id=${encodeURIComponent(task.id)}&retry_dir=${encodeURIComponent(retryDirectory)}`,
-                    {
-                        method: 'POST'
-                    }
-                );
-                closeRetryModal();
-                await initializeTasks();
-                showToast(result.message || `Retry queued for ${task.filename}`);
-            } catch (error) {
-                console.error('Error retrying task:', error);
-                showToast(`Failed to retry task: ${error.message}`, 'error');
+        function statusLabel(status) {
+            switch (status) {
+                case 'downloading': return '下载中';
+                case 'queued': return '排队';
+                case 'completed': return '已完成';
+                case 'failed': return '失败';
+                case 'cancelled': return '已取消';
+                case 'ignored': return '已忽略';
+                default: return status || '–';
             }
         }
 
-        function getSendCodeRemainingSeconds() {
-            if (!sendCodeCooldownUntil) {
-                return 0;
-            }
-            return Math.max(0, Math.ceil((sendCodeCooldownUntil - Date.now()) / 1000));
+        function toast(message, type='info', timeout=2800) {
+            const stack = $('#toastStack');
+            const el = document.createElement('div');
+            el.className = `toast ${type}`;
+            el.textContent = message;
+            stack.appendChild(el);
+            requestAnimationFrame(() => el.classList.add('show'));
+            setTimeout(() => {
+                el.classList.remove('show');
+                setTimeout(() => el.remove(), 250);
+            }, timeout);
         }
 
-        function startSendCodeCooldown(seconds) {
-            const cooldownSeconds = Number(seconds) || 0;
-            if (sendCodeCooldownTimer) {
-                window.clearInterval(sendCodeCooldownTimer);
-                sendCodeCooldownTimer = null;
+        async function apiFetch(url, opts={}) {
+            const res = await fetch(url, opts);
+            const contentType = res.headers.get('content-type') || '';
+            let data = null;
+            if (contentType.includes('application/json')) {
+                data = await res.json();
+            } else if (!opts.rawResponse) {
+                data = { ok: res.ok };
             }
-
-            if (cooldownSeconds <= 0) {
-                sendCodeCooldownUntil = 0;
-                updateAuthPanelDynamicState();
-                return;
+            if (!res.ok) {
+                const err = (data && data.error) ? data.error : `HTTP ${res.status}`;
+                throw new Error(err);
             }
-
-            sendCodeCooldownUntil = Date.now() + cooldownSeconds * 1000;
-            updateAuthPanelDynamicState();
-
-            sendCodeCooldownTimer = window.setInterval(() => {
-                const remaining = getSendCodeRemainingSeconds();
-                if (remaining <= 0) {
-                    window.clearInterval(sendCodeCooldownTimer);
-                    sendCodeCooldownTimer = null;
-                    sendCodeCooldownUntil = 0;
-                }
-                updateAuthPanelDynamicState();
-            }, 1000);
+            return data;
         }
 
-        function syncAuthDraftWithState() {
-            authDraft.phone = authState.phone || authDraft.phone || '';
-            if (!authState.awaiting_code) {
-                authDraft.code = '';
-            }
-            if (!authState.requires_password) {
-                authDraft.password = '';
-            }
-            if (authState.authorized) {
-                authDraft.code = '';
-                authDraft.password = '';
-            }
-        }
-
-        function captureAuthDraft() {
-            const phoneInput = document.getElementById('auth-phone');
-            const codeInput = document.getElementById('auth-code');
-            const passwordInput = document.getElementById('auth-password');
-
-            if (phoneInput) {
-                authDraft.phone = phoneInput.value;
-            }
-            if (codeInput) {
-                authDraft.code = codeInput.value;
-            }
-            if (passwordInput) {
-                authDraft.password = passwordInput.value;
-            }
-        }
-
-        function bindAuthDraft(input, fieldName) {
-            input.addEventListener('input', () => {
-                authDraft[fieldName] = input.value;
-            });
-        }
-
-        function getAuthPanelSignature() {
-            return JSON.stringify({
-                authorized: Boolean(authState.authorized),
-                awaiting_code: Boolean(authState.awaiting_code),
-                requires_password: Boolean(authState.requires_password)
-            });
-        }
-
-        function updateAuthPanelDynamicState() {
-            const resendAvailableIn = getSendCodeRemainingSeconds() || Number(authState.resend_available_in) || 0;
-            const badge = document.getElementById('auth-badge');
-            const message = document.getElementById('auth-message');
-            const sendCodeBtn = document.getElementById('auth-send-code-btn');
-
-            if (badge) {
-                badge.className = `auth-badge ${authState.authorized ? 'auth-badge-ready' : 'auth-badge-waiting'}`;
-                badge.textContent = authState.authorized ? 'Authorized' : 'Login Required';
-            }
-
-            if (message) {
-                message.textContent = authState.message || (authState.authorized ? 'Telegram is ready.' : 'Please sign in.');
-            }
-
-            if (sendCodeBtn) {
-                sendCodeBtn.textContent = resendAvailableIn > 0
-                    ? `Resend in ${resendAvailableIn}s`
-                    : (authState.awaiting_code ? 'Resend Code' : 'Send Code');
-                sendCodeBtn.disabled = resendAvailableIn > 0 || overlayVisible;
-            }
-        }
-
-        function renderAuthPanel(force = false) {
-            const panel = document.getElementById('auth-panel');
-            if (!panel) {
-                return;
-            }
-
-            captureAuthDraft();
-            syncAuthDraftWithState();
-
-            const nextSignature = getAuthPanelSignature();
-            if (!force && panel.dataset.authSignature === nextSignature) {
-                updateAuthPanelDynamicState();
-                return;
-            }
-
-            panel.dataset.authSignature = nextSignature;
-            panel.innerHTML = '';
-
-            const badge = document.createElement('div');
-            badge.id = 'auth-badge';
-            panel.appendChild(badge);
-
-            const message = document.createElement('p');
-            message.id = 'auth-message';
-            message.className = 'auth-message';
-            panel.appendChild(message);
-
-            if (authState.authorized) {
-                updateAuthPanelDynamicState();
-                return;
-            }
-
-            const form = document.createElement('div');
-            form.className = 'auth-form';
-
-            const phoneInput = document.createElement('input');
-            phoneInput.id = 'auth-phone';
-            phoneInput.type = 'tel';
-            phoneInput.autocomplete = 'tel';
-            phoneInput.inputMode = 'tel';
-            phoneInput.enterKeyHint = authState.awaiting_code || authState.requires_password ? 'next' : 'send';
-            phoneInput.placeholder = 'Phone number (for example +8613800138000)';
-            phoneInput.value = authDraft.phone || '';
-            bindAuthDraft(phoneInput, 'phone');
-            form.appendChild(phoneInput);
-
-            if (authState.awaiting_code) {
-                const codeInput = document.createElement('input');
-                codeInput.id = 'auth-code';
-                codeInput.autocomplete = 'one-time-code';
-                codeInput.inputMode = 'numeric';
-                codeInput.enterKeyHint = authState.requires_password ? 'next' : 'done';
-                codeInput.placeholder = 'Verification code';
-                codeInput.value = authDraft.code || '';
-                codeInput.addEventListener('keydown', (event) => {
-                    if (event.key === 'Enter') {
-                        event.preventDefault();
-                        verifyAuthCode();
-                    }
-                });
-                bindAuthDraft(codeInput, 'code');
-                form.appendChild(codeInput);
-            }
-
-            if (authState.requires_password) {
-                const passwordInput = document.createElement('input');
-                passwordInput.id = 'auth-password';
-                passwordInput.type = 'password';
-                passwordInput.autocomplete = 'current-password';
-                passwordInput.enterKeyHint = 'done';
-                passwordInput.placeholder = 'Two-step verification password';
-                passwordInput.value = authDraft.password || '';
-                passwordInput.addEventListener('keydown', (event) => {
-                    if (event.key === 'Enter') {
-                        event.preventDefault();
-                        verifyAuthPassword();
-                    }
-                });
-                bindAuthDraft(passwordInput, 'password');
-                form.appendChild(passwordInput);
-            }
-
-            const actions = document.createElement('div');
-            actions.className = 'auth-actions';
-
-            const sendCodeBtn = document.createElement('button');
-            sendCodeBtn.id = 'auth-send-code-btn';
-            sendCodeBtn.className = 'auth-btn auth-btn-primary';
-            sendCodeBtn.addEventListener('click', sendAuthCode);
-            actions.appendChild(sendCodeBtn);
-
-            if (authState.awaiting_code) {
-                const verifyBtn = document.createElement('button');
-                verifyBtn.className = 'auth-btn auth-btn-secondary';
-                verifyBtn.textContent = 'Verify Code';
-                verifyBtn.addEventListener('click', verifyAuthCode);
-                actions.appendChild(verifyBtn);
-            }
-
-            if (authState.requires_password) {
-                const passwordBtn = document.createElement('button');
-                passwordBtn.className = 'auth-btn auth-btn-secondary';
-                passwordBtn.textContent = 'Verify Password';
-                passwordBtn.addEventListener('click', verifyAuthPassword);
-                actions.appendChild(passwordBtn);
-            }
-
-            form.appendChild(actions);
-            panel.appendChild(form);
-            updateAuthPanelDynamicState();
-        }
-
-        async function refreshAuthStatus() {
-            try {
-                authState = await apiRequest('/api/auth/status');
-                if (!getSendCodeRemainingSeconds() && authState.resend_available_in) {
-                    startSendCodeCooldown(authState.resend_available_in);
-                }
-                renderAuthPanel();
-                if (authState.authorized) {
-                    await updateStatusData();
-                }
-            } catch (error) {
-                console.error('Failed to refresh auth status:', error);
-            }
-        }
-
-        async function sendAuthCode() {
-            const phone = (document.getElementById('auth-phone')?.value || '').trim();
-            if (!phone) {
-                showToast('Please enter a phone number first.', 'error');
-                return;
-            }
-
-            const remaining = getSendCodeRemainingSeconds();
-            if (remaining > 0) {
-                showToast(`Please wait ${remaining} seconds before sending another code.`, 'error');
-                return;
-            }
-
-            try {
-                showScreenOverlay('Sending verification code...');
-                authState = await apiRequest('/api/auth/send-code', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ phone })
-                });
-                startSendCodeCooldown(authState.resend_available_in || 60);
-                renderAuthPanel();
-                showToast(authState.message || 'Verification code sent.');
-            } catch (error) {
-                if (error.payload?.resend_available_in) {
-                    startSendCodeCooldown(error.payload.resend_available_in);
-                }
-                showToast(`Failed to send code: ${error.message}`, 'error');
-            } finally {
-                hideScreenOverlay();
-            }
-        }
-
-        async function verifyAuthCode() {
-            const phone = (document.getElementById('auth-phone')?.value || authState.phone || '').trim();
-            const code = (document.getElementById('auth-code')?.value || '').trim();
-            if (!phone || !code) {
-                showToast('Phone number and verification code are required.', 'error');
-                return;
-            }
-
-            try {
-                authState = await apiRequest('/api/auth/verify-code', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ phone, code })
-                });
-                renderAuthPanel();
-                showToast(authState.message || 'Verification complete.');
-                if (authState.authorized) {
-                    await updateStatusData();
-                    await refreshAuthStatus();
-                }
-            } catch (error) {
-                showToast(`Failed to verify code: ${error.message}`, 'error');
-            }
-        }
-
-        async function verifyAuthPassword() {
-            const password = document.getElementById('auth-password')?.value || '';
-            if (!password) {
-                showToast('Please enter your two-step verification password.', 'error');
-                return;
-            }
-
-            try {
-                authState = await apiRequest('/api/auth/verify-password', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ password })
-                });
-                renderAuthPanel();
-                showToast(authState.message || 'Password verified.');
-                if (authState.authorized) {
-                    await updateStatusData();
-                    await refreshAuthStatus();
-                }
-            } catch (error) {
-                showToast(`Failed to verify password: ${error.message}`, 'error');
-            }
-        }
-
-        // Initialize Socket.IO connection
-        const socket = io();
-
-        // Handle connection event
-        socket.on('connect', () => {
-            console.log('WebSocket connected');
-        });
-
-        // Handle disconnection event
-        socket.on('disconnect', () => {
-            console.log('WebSocket disconnected');
-        });
-
-        // Handle new task notification
-        socket.on('new_task', (task) => {
-            console.log('New task received:', task);
-            // Refresh tasks list to show new task
-            initializeTasks();
-        });
-
-        // Handle download progress update
-        socket.on('download_progress', (progressData) => {
-            console.log('Download progress update:', progressData);
-            // Update progress bar for the specific task
-            updateTaskProgress(progressData);
-        });
-
-        // Handle status update event for real-time stats
-        socket.on('status_update', (statusData) => {
-            console.log('Status update received:', statusData);
-            // Update the stats on the page
-            document.getElementById('active-downloads').textContent = statusData.active_downloads;
-            document.getElementById('queue-size').textContent = statusData.queue_size;
-            document.getElementById('total-tasks').textContent = statusData.total_tasks;
-        });
-
-        // Function to update task progress in the UI
-        function updateTaskProgress(progressData) {
-            const taskItems = document.querySelectorAll('.task-item');
-            taskItems.forEach(item => {
-                const taskName = item.querySelector('.task-name').textContent;
-                if (taskName === progressData.filename) {
-                    const progressElement = item.querySelector('.task-progress');
-                    if (progressElement) {
-                        const progressText = `${progressData.progress}%`;
-                        const textNode = Array.from(progressElement.childNodes).find(node => node.nodeType === Node.TEXT_NODE);
-                        if (textNode) {
-                            textNode.textContent = progressText;
-                        } else {
-                            progressElement.insertBefore(document.createTextNode(progressText), progressElement.firstChild);
-                        }
-                    }
-
-                    const progressBar = item.querySelector('.progress-bar');
-                    if (progressBar) {
-                        progressBar.style.width = `${progressData.progress}%`;
-                    }
-                }
-            });
-        }
-
-        // Function to get file type category
-        function getFileTypeCategory(filename) {
-            const ext = filename.split('.').pop().toLowerCase();
-
-            // Check ignore list first
-            if (fileTypeRules['IGNORE'].includes(ext)) {
-                return 'IGNORE';
-            }
-
-            // Check each category
-            for (const [category, extensions] of Object.entries(fileTypeRules)) {
-                if (category !== 'IGNORE' && extensions.includes(ext)) {
-                    return category;
-                }
-            }
-
-            // Default to Other if no match
-            return 'Other';
-        }
-
-        // Pagination and Filtering
-        let currentPage = 1;
-        let itemsPerPage = 10;
-        let allTasks = [];
-        let totalItems = 0;
-        let totalPages = 0;
-        let currentFilters = {}; // Store current filters for auto-refresh
-
-        // Initialize uptime tracking
-        let startTime = null;
-        let initialUptimeSeconds = 0;
-
-        // Format seconds into HH:MM:SS
-        function formatUptime(seconds) {
-            const hours = Math.floor(seconds / 3600);
-            const minutes = Math.floor((seconds % 3600) / 60);
-            const secs = Math.floor(seconds % 60);
-            return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-        }
-
-        // Update uptime every second using local calculation
-        function updateLocalUptime() {
-            if (startTime) {
-                const currentTime = Date.now();
-                const elapsedSeconds = Math.floor((currentTime - startTime) / 1000);
-                const totalSeconds = initialUptimeSeconds + elapsedSeconds;
-                document.getElementById('uptime').textContent = formatUptime(totalSeconds);
-            }
-        }
-
-        // Update other status data from API
-        async function updateStatusData() {
-            try {
-                const data = await apiRequest('/api/status');
-                document.getElementById('active-downloads').textContent = data.active_downloads;
-                document.getElementById('queue-size').textContent = data.queue_size;
-                document.getElementById('total-tasks').textContent = data.total_tasks;
-                telegramUser = data.telegram_user || null;
-                telegramChannel = data.channel_info || { title: 'Unknown Channel', id: data.channel_id, username: null };
-                renderTelegramUserPanel();
-                renderChannelPanel();
-
-                if (!startTime) {
-                    const uptimeParts = data.uptime.split(':');
-                    initialUptimeSeconds = parseInt(uptimeParts[0]) * 3600 + parseInt(uptimeParts[1]) * 60 + parseInt(uptimeParts[2]);
-                    startTime = Date.now();
-                    setInterval(updateLocalUptime, 1000);
-                }
-            } catch (error) {
-                console.error('Failed to update status:', error);
-            }
-        }
-
-        // Initialize tasks data from API with optional filters
-        async function initializeTasks(filters = {}) {
-            const effectiveFilters = Object.keys(filters).length === 0 ? currentFilters : filters;
-            try {
-                const tasksData = await apiRequest('/api/tasks');
-                const realTimeTasks = tasksData.tasks.map((task, index) => ({
-                    id: `real-${index}`,
-                    filename: task.filename,
-                    status: task.status,
-                    type: getFileTypeCategory(task.filename),
-                    downloadTime: task.downloadTime || new Date().toISOString().slice(0, 19).replace('T', ' '),
-                    progress: task.progress,
-                    size: task.size || 0,
-                    sourceMessageLink: task.source_message_link || '',
-                    isRealTime: true,
-                    canRetry: false,
-                    retryCount: 0,
-                    errorMessage: ''
-                }));
-
-                let queryString = `?page=${currentPage}&per_page=${itemsPerPage}`;
-                if (effectiveFilters.filename) {
-                    queryString += `&filename=${encodeURIComponent(effectiveFilters.filename)}`;
-                }
-                if (effectiveFilters.filetype && effectiveFilters.filetype !== 'all') {
-                    queryString += `&file_type=${encodeURIComponent(effectiveFilters.filetype)}`;
-                }
-                if (effectiveFilters.status && effectiveFilters.status !== 'all') {
-                    queryString += `&status=${encodeURIComponent(effectiveFilters.status)}`;
-                }
-
-                const includeHistory = !['queued', 'downloading'].includes(effectiveFilters.status);
-                const historyData = includeHistory
-                    ? await apiRequest(`/api/history${queryString}`)
-                    : { history: [], total: 0, pages: 0 };
-                const activeTaskKeys = new Set(realTimeTasks.map(task => `${task.status}:${task.filename}`));
-                const historicalTasks = historyData.history.map(task => ({
-                    id: `history-${task.id}`,
-                    filename: task.filename,
-                    status: task.status,
-                    type: task.file_type,
-                    downloadTime: task.start_time,
-                    progress: `${task.progress}%`,
-                    size: task.size || 0,
-                    downloadPath: task.download_path || '',
-                    downloadDirectory: task.download_path ? task.download_path.split('/').slice(0, -1).join('/') : '',
-                    targetDir: task.target_dir || '',
-                    thumbnailPath: task.thumbnail_path,
-                    sourceMessageLink: task.source_message_link || '',
-                    sourceMessageId: task.source_message_id,
-                    retryCount: task.retry_count || 0,
-                    errorMessage: task.error_message || '',
-                    isRealTime: false,
-                    canRetry: Boolean(task.source_message_id && task.source_channel_id)
-                })).filter(task => {
-                    if (!['queued', 'downloading'].includes(task.status)) {
-                        return true;
-                    }
-                    return !activeTaskKeys.has(`${task.status}:${task.filename}`);
-                });
-
-                const taskMap = new Map();
-                realTimeTasks.forEach(task => taskMap.set(`${task.filename}:${task.status}`, task));
-                historicalTasks.forEach(task => taskMap.set(task.id, task));
-                allTasks = Array.from(taskMap.values());
-
-                const realTimeTasksInFilter = realTimeTasks.filter(task => {
-                    const matchesFilename = !effectiveFilters.filename ||
-                        task.filename.toLowerCase().includes(effectiveFilters.filename.toLowerCase());
-                    const matchesFiletype = !effectiveFilters.filetype || effectiveFilters.filetype === 'all' ||
-                        task.type === effectiveFilters.filetype;
-                    const matchesStatus = !effectiveFilters.status || effectiveFilters.status === 'all' ||
-                        task.status === effectiveFilters.status;
-                    return matchesFilename && matchesFiletype && matchesStatus;
-                });
-
-                totalItems = historyData.total + realTimeTasksInFilter.length;
-                totalPages = Math.ceil(totalItems / itemsPerPage);
-                renderTasks();
-            } catch (error) {
-                console.error('Failed to load tasks:', error);
-                showToast(`Failed to load tasks: ${error.message}`, 'error');
-            }
-        }
-
-        // Apply filters
-        function applyFilters() {
-            currentPage = 1;
-
-            // Get filter values
-            const filenameFilter = document.getElementById('filename-filter').value;
-            const filetypeFilter = document.getElementById('filetype-filter').value;
-            const statusFilter = document.getElementById('status-filter').value;
-            itemsPerPage = parseInt(document.getElementById('items-per-page').value);
-
-            // Store current filters for auto-refresh
-            currentFilters = {
-                filename: filenameFilter,
-                filetype: filetypeFilter,
-                status: statusFilter
+        function fileIcon(type) {
+            const map = {
+                Videos: 'M4 4h16v16H4zM9 9l6 3-6 3z',
+                Pictures: 'M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5 11 16l3.5-4.5L19 18H5l3.5-4.5z',
+                Music: 'M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z',
+                Documents: 'M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm-1 1.5L18.5 9H14c-.55 0-1-.45-1-1V3.5z',
+                Archives: 'M20 6h-4V4c0-1.1-.9-2-2-2h-4c-1.1 0-2 .9-2 2v2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-8 8h-2v-2h2v2zm2-8h-6V4h6v2z',
+                Books: 'M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 15H8V4h10v13z',
+                Programs: 'M20 3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H4V7h16v12z',
+                Android: 'M6 18c0 .55.45 1 1 1h1v3.5c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5V19h2v3.5c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5V19h1c.55 0 1-.45 1-1V8H6v10z',
+                Mac: 'M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04z'
             };
-
-            // Call initializeTasks with filters to fetch filtered data from API
-            initializeTasks(currentFilters);
+            const path = map[type] || 'M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6z';
+            return `<svg viewBox="0 0 24 24"><path d="${path}"/></svg>`;
         }
 
-        // Reset filters
-        function resetFilters() {
-            document.getElementById('filename-filter').value = '';
-            document.getElementById('filetype-filter').value = 'all';
-            document.getElementById('status-filter').value = 'all';
-            document.getElementById('items-per-page').value = '10';
-            itemsPerPage = 10;
-
-            currentFilters = {};
-            initializeTasks();
+        function inferType(filename) {
+            if (!filename) return 'Documents';
+            const ext = (filename.split('.').pop() || '').toLowerCase();
+            const videoExts = ['mp4','mkv','avi','mov','mpg','mpeg','flv','webm','wmv','3gp','ts','ogv','vob','srt'];
+            const picExts = ['jpg','jpeg','png','gif','bmp','webp','svg','psd','tiff'];
+            const musicExts = ['mp3','flac','aac','ogg','m4a','wav','amr','wma','aiff'];
+            const docExts = ['pdf','doc','docx','xls','xlsx','ppt','pptx','txt','md','csv','json','odp','odt','ods'];
+            const archiveExts = ['zip','rar','7z','tar','gz','bz2','xz','tgz','iso'];
+            const bookExts = ['mobi','epub','chm'];
+            if (videoExts.includes(ext)) return 'Videos';
+            if (picExts.includes(ext)) return 'Pictures';
+            if (musicExts.includes(ext)) return 'Music';
+            if (archiveExts.includes(ext)) return 'Archives';
+            if (bookExts.includes(ext)) return 'Books';
+            if (docExts.includes(ext)) return 'Documents';
+            if (ext === 'apk') return 'Android';
+            if (['dmg','pkg'].includes(ext)) return 'Mac';
+            if (ext === 'deb') return 'DEBPackages';
+            if (ext === 'rpm') return 'RPMPackages';
+            return 'Documents';
         }
 
-        function getProgressPercent(task) {
-            if (task.status !== 'downloading' || !task.progress) {
-                return 0;
+        function renderStats(status) {
+            if (!status) return;
+            if (status.active_downloads != null) $('#statActive').textContent = status.active_downloads;
+            if (status.queue_size != null) $('#statQueue').textContent = status.queue_size;
+            if (status.total_tasks != null) $('#statTotal').textContent = status.total_tasks;
+            if (status.uptime) $('#statUptime').textContent = status.uptime;
+            if (status.total_download_speed_mbps != null) {
+                $('#statSpeed').textContent = `${Number(status.total_download_speed_mbps).toFixed(2)} MB/s`;
             }
-            const percentMatch = task.progress.match(/(\d+(?:\.\d+)?) %/);
-            return percentMatch ? parseFloat(percentMatch[1]) : 0;
+            if (status.channel_info) {
+                $('#infoChannel').textContent = status.channel_info.title || `#${status.channel_id}`;
+            } else if (status.channel_id) {
+                $('#infoChannel').textContent = `#${status.channel_id}`;
+            }
         }
 
-        function createTaskThumbnail(task) {
-            if (!task.thumbnailPath) {
-                return null;
-            }
+        function taskRowHtml(task) {
+            const percentage = parseProgress(task.progress);
+            const badgeClass = task.status || 'queued';
+            const iconType = task.file_type || inferType(task.filename);
+            const name = escapeHtml(task.filename || 'unknown');
+            const sizeStr = task.size ? formatBytes(task.size) : '';
+            const speedStr = task.speed_bps ? formatSpeed(task.speed_bps) : '';
+            const started = task.downloadTime ? escapeHtml(task.downloadTime) : '';
+            const link = task.source_message_link ? escapeHtml(task.source_message_link) : '';
+            const id = task.task_id || '';
 
-            const thumbnailWrapper = document.createElement('div');
-            thumbnailWrapper.className = 'task-thumbnail';
-
-            const thumbnail = document.createElement('img');
-            thumbnail.className = 'task-thumbnail-image';
-            thumbnail.src = `/api/thumbnail?task_id=${encodeURIComponent(task.id)}`;
-            thumbnail.alt = 'thumbnail';
-            thumbnailWrapper.appendChild(thumbnail);
-            return thumbnailWrapper;
-        }
-
-        function createTaskDetails(task) {
-            const details = document.createElement('div');
-            details.className = 'task-details';
-
-            const thumbnail = createTaskThumbnail(task);
-            if (thumbnail) {
-                const thumbnailRow = document.createElement('div');
-                thumbnailRow.className = 'task-detail task-detail-thumbnail';
-                const thumbnailLabel = document.createElement('strong');
-                thumbnailLabel.textContent = 'Preview:';
-                thumbnailRow.appendChild(thumbnailLabel);
-                thumbnailRow.appendChild(thumbnail);
-                details.appendChild(thumbnailRow);
-            }
-
-            if (task.sourceMessageLink) {
-                const linkRow = document.createElement('div');
-                linkRow.className = 'task-detail task-detail-block';
-                const label = document.createElement('strong');
-                label.textContent = 'Source: ';
-                const link = document.createElement('a');
-                link.className = 'task-link';
-                link.href = task.sourceMessageLink;
-                link.target = '_blank';
-                link.rel = 'noopener noreferrer';
-                link.textContent = task.sourceMessageLink;
-                linkRow.appendChild(label);
-                linkRow.appendChild(link);
-                details.appendChild(linkRow);
-            }
-
-            if (task.downloadPath) {
-                const pathRow = document.createElement('div');
-                pathRow.className = 'task-detail task-detail-block';
-                const pathLabel = document.createElement('strong');
-                pathLabel.textContent = 'Saved at: ';
-                pathRow.appendChild(pathLabel);
-                pathRow.appendChild(document.createTextNode(task.downloadPath));
-                details.appendChild(pathRow);
-            }
-
-            if (task.retryCount) {
-                const retryRow = document.createElement('div');
-                retryRow.className = 'task-detail task-detail-chip';
-                const retryLabel = document.createElement('strong');
-                retryLabel.textContent = 'Retries: ';
-                retryRow.appendChild(retryLabel);
-                retryRow.appendChild(document.createTextNode(String(task.retryCount)));
-                details.appendChild(retryRow);
-            }
-
-            if (task.errorMessage) {
-                const errorRow = document.createElement('div');
-                errorRow.className = 'task-detail task-detail-block';
-                const errorLabel = document.createElement('strong');
-                errorLabel.textContent = 'Last error: ';
-                errorRow.appendChild(errorLabel);
-                errorRow.appendChild(document.createTextNode(task.errorMessage));
-                details.appendChild(errorRow);
-            }
-
-            return details;
-        }
-
-        function taskHasDetails(task) {
-            return Boolean(task.thumbnailPath || task.sourceMessageLink || task.downloadPath || task.retryCount || task.errorMessage);
-        }
-
-        function createTaskActions(task) {
-            const taskActions = document.createElement('div');
-            taskActions.className = 'task-actions';
-
-            if (!task.isRealTime) {
-                const downloadBtn = document.createElement('button');
-                downloadBtn.className = 'task-btn download-btn';
-                downloadBtn.textContent = 'Download';
-                downloadBtn.disabled = task.status !== 'completed' || !task.downloadPath;
-                downloadBtn.addEventListener('click', () => downloadFile(task.id, task.filename));
-                taskActions.appendChild(downloadBtn);
-
-                const renameBtn = document.createElement('button');
-                renameBtn.className = 'task-btn rename-btn';
-                renameBtn.textContent = 'Rename';
-                renameBtn.disabled = task.status === 'downloading' || task.status === 'queued';
-                renameBtn.addEventListener('click', () => renameFile(task.id, task.filename));
-                taskActions.appendChild(renameBtn);
-
-                const deleteBtn = document.createElement('button');
-                deleteBtn.className = 'task-btn delete-btn';
-                deleteBtn.textContent = 'Delete';
-                deleteBtn.addEventListener('click', () => deleteFile(task));
-                taskActions.appendChild(deleteBtn);
-
-                if (task.canRetry) {
-                    const retryBtn = document.createElement('button');
-                    retryBtn.className = 'task-btn retry-btn';
-                    retryBtn.textContent = 'Retry';
-                    retryBtn.disabled = task.status === 'downloading' || task.status === 'queued';
-                    retryBtn.addEventListener('click', () => openRetryModal(task));
-                    taskActions.appendChild(retryBtn);
-                }
-            }
-
-            return taskActions;
-        }
-
-        function createTaskCard(task) {
-            const taskElement = document.createElement('div');
-            taskElement.className = 'task-item';
-
-            const summary = document.createElement('div');
-            summary.className = 'task-row-summary';
-
-            const hasDetails = taskHasDetails(task);
-            const toggle = document.createElement('button');
-            toggle.className = 'task-toggle';
-            toggle.type = 'button';
-            toggle.textContent = hasDetails ? '+' : '';
-            toggle.disabled = !hasDetails;
-            summary.appendChild(toggle);
-
-            const nameWrap = document.createElement('div');
-            nameWrap.className = 'task-name-wrap task-summary-cell';
-            const taskName = document.createElement('div');
-            taskName.className = 'task-name';
-            taskName.textContent = task.filename;
-            nameWrap.appendChild(taskName);
-            if (task.sourceMessageLink) {
-                const sourceHint = document.createElement('div');
-                sourceHint.className = 'task-name-sub';
-                sourceHint.textContent = task.sourceMessageLink;
-                nameWrap.appendChild(sourceHint);
-            }
-            summary.appendChild(nameWrap);
-
-            const typeCell = document.createElement('div');
-            typeCell.className = 'task-summary-cell';
-            typeCell.textContent = task.type;
-            summary.appendChild(typeCell);
-
-            const statusCell = document.createElement('div');
-            statusCell.className = 'task-summary-cell';
-            const taskStatus = document.createElement('span');
-            taskStatus.className = `task-status status-${task.status}`;
-            taskStatus.textContent = task.status;
-            statusCell.appendChild(taskStatus);
-            summary.appendChild(statusCell);
-
-            const sizeCell = document.createElement('div');
-            sizeCell.className = 'task-summary-cell';
-            sizeCell.textContent = formatFileSize(task.size);
-            summary.appendChild(sizeCell);
-
-            const timeCell = document.createElement('div');
-            timeCell.className = 'task-summary-cell';
-            timeCell.textContent = task.downloadTime || '-';
-            summary.appendChild(timeCell);
-
-            const progressCell = document.createElement('div');
-            progressCell.className = 'task-progress';
-            progressCell.textContent = task.progress || '-';
+            let progressHtml = '';
             if (task.status === 'downloading') {
-                const progressBarContainer = document.createElement('div');
-                progressBarContainer.className = 'progress-bar-container';
-                const progressBar = document.createElement('div');
-                progressBar.className = 'progress-bar';
-                progressBar.style.width = `${getProgressPercent(task)}%`;
-                progressBarContainer.appendChild(progressBar);
-                progressCell.appendChild(progressBarContainer);
-            }
-            summary.appendChild(progressCell);
-
-            const actions = createTaskActions(task);
-            summary.appendChild(actions);
-            taskElement.appendChild(summary);
-
-            if (hasDetails) {
-                const details = createTaskDetails(task);
-                details.style.display = 'none';
-                toggle.addEventListener('click', () => {
-                    const isOpen = details.style.display !== 'none';
-                    details.style.display = isOpen ? 'none' : 'flex';
-                    toggle.textContent = isOpen ? '+' : '-';
-                    toggle.classList.toggle('is-open', !isOpen);
-                });
-                taskElement.appendChild(details);
+                progressHtml = `<div class="progress"><span style="width:${Math.min(100, percentage).toFixed(2)}%"></span></div>`;
+            } else if (task.status === 'queued') {
+                progressHtml = `<div class="progress indeterminate"><span></span></div>`;
             }
 
-            return taskElement;
+            const metaBits = [];
+            if (sizeStr) metaBits.push(sizeStr);
+            if (task.status === 'downloading') metaBits.push(`${percentage.toFixed(1)}%`);
+            if (speedStr) metaBits.push(speedStr);
+            if (started) metaBits.push(started);
+            else if (task.queue_age_seconds != null) metaBits.push(`已等待 ${Math.max(task.queue_age_seconds, 0)}s`);
+            const metaHtml = metaBits.map(escapeHtml).join('<span class="sep"></span>');
+
+            const actions = [];
+            if (task.status === 'downloading' || task.status === 'queued') {
+                actions.push(`<button class="btn danger" data-action="cancel" data-id="${escapeHtml(id)}">取消</button>`);
+            }
+
+            return `
+                <li class="row" data-id="${escapeHtml(id)}">
+                    <div class="row-thumb">${fileIcon(iconType)}</div>
+                    <div class="row-main">
+                        <div class="row-name" title="${name}">${name}</div>
+                        <div class="row-meta">${metaHtml}</div>
+                        ${progressHtml}
+                    </div>
+                    <div class="row-right">
+                        <span class="badge ${badgeClass}">${escapeHtml(statusLabel(task.status))}</span>
+                        ${link ? `<a class="btn" href="${link}" target="_blank" rel="noreferrer">源消息</a>` : ''}
+                    </div>
+                    ${actions.length ? `<div class="row-actions">${actions.join('')}</div>` : ''}
+                </li>`;
         }
 
-        function renderTasks() {
-            const taskList = document.getElementById('task-list');
-            const hasItems = totalItems > 0;
-            const startIndex = hasItems ? ((currentPage - 1) * itemsPerPage) + 1 : 0;
-            const endIndex = hasItems ? Math.min(currentPage * itemsPerPage, totalItems) : 0;
+        function historyRowHtml(item) {
+            const percentage = parseProgress(item.progress);
+            const badgeClass = item.status || 'completed';
+            const iconType = item.file_type || inferType(item.filename);
+            const name = escapeHtml(item.filename || 'unknown');
+            const sizeStr = item.size ? formatBytes(item.size) : '';
+            const link = item.source_message_link ? escapeHtml(item.source_message_link) : '';
+            const started = item.start_time ? formatDate(item.start_time) : '';
+            const ended = item.end_time ? formatDate(item.end_time) : '';
+            const err = item.error_message ? escapeHtml(item.error_message) : '';
+            const id = 'history-' + item.id;
 
-            document.getElementById('showing-start').textContent = startIndex;
-            document.getElementById('showing-end').textContent = endIndex;
-            document.getElementById('total-items').textContent = totalItems;
+            const metaBits = [];
+            if (sizeStr) metaBits.push(sizeStr);
+            if (item.file_type) metaBits.push(item.file_type);
+            if (started) metaBits.push(started);
+            if (item.retry_count) metaBits.push(`重试 ${item.retry_count}`);
+            const metaHtml = metaBits.map(escapeHtml).join('<span class="sep"></span>');
 
-            taskList.innerHTML = '';
+            const actions = [];
+            if (item.status === 'completed') {
+                actions.push(`<a class="btn primary" href="/api/download?task_id=${encodeURIComponent(id)}&filename=${encodeURIComponent(item.filename)}">下载</a>`);
+                actions.push(`<button class="btn" data-action="rename" data-id="${item.id}" data-name="${escapeHtml(item.filename)}">重命名</button>`);
+            }
+            if (item.status === 'failed' || item.status === 'cancelled') {
+                actions.push(`<button class="btn success" data-action="retry" data-id="${item.id}">重试</button>`);
+            }
+            if (item.status === 'downloading' || item.status === 'queued') {
+                actions.push(`<button class="btn danger" data-action="cancel" data-id="${item.id}">取消</button>`);
+            }
+            actions.push(`<button class="btn danger" data-action="delete" data-id="${item.id}" data-name="${escapeHtml(item.filename)}" data-status="${escapeHtml(item.status||'')}">删除</button>`);
 
-            if (allTasks.length === 0) {
-                taskList.innerHTML = '<div class="empty-state">No matching tasks</div>';
+            let progressHtml = '';
+            if (item.status === 'downloading') {
+                progressHtml = `<div class="progress"><span style="width:${Math.min(100, percentage).toFixed(2)}%"></span></div>`;
+            }
+
+            // 仅完成的图片才能点缩略图预览；其他情况还是静态展示
+            const isImagePreviewable = item.status === 'completed' && (iconType === 'Pictures');
+            const thumbImgSrc = item.thumbnail_path ? `/api/thumbnail?task_id=${item.id}` : '';
+            let thumb;
+            if (item.status === 'completed' && item.thumbnail_path) {
+                if (isImagePreviewable) {
+                    thumb = `<button type="button" class="row-thumb-btn" data-action="preview" data-id="${item.id}" data-name="${escapeHtml(item.filename)}" style="all:unset; cursor:zoom-in; display:block; width:100%; height:100%"><img loading="lazy" src="${thumbImgSrc}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{innerHTML:this.dataset.fallback}))" data-fallback="${escapeHtml(fileIcon(iconType))}"></button>`;
+                } else {
+                    thumb = `<img loading="lazy" src="${thumbImgSrc}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{innerHTML:this.dataset.fallback}))" data-fallback="${escapeHtml(fileIcon(iconType))}">`;
+                }
             } else {
-                allTasks.forEach(task => {
-                    taskList.appendChild(createTaskCard(task));
-                });
+                thumb = fileIcon(iconType);
             }
 
-            updatePagination(totalPages);
+            const checkbox = `<label class="row-select" style="display:inline-flex; align-items:center; padding:0 4px 0 8px"><input type="checkbox" data-batch data-id="${item.id}" data-name="${escapeHtml(item.filename)}" data-status="${escapeHtml(item.status||'')}"></label>`;
+
+            return `
+                <li class="row" data-id="${id}">
+                    ${checkbox}
+                    <div class="row-thumb">${thumb}</div>
+                    <div class="row-main">
+                        <div class="row-name" title="${name}">${name}</div>
+                        <div class="row-meta">${metaHtml}</div>
+                        ${progressHtml}
+                        ${err ? `<div class="row-meta" style="color:var(--danger)" title="${err}">${err.length > 120 ? err.slice(0,120)+'…' : err}</div>` : ''}
+                        ${ended && item.status !== 'downloading' ? `<div class="row-meta"><span>结束 ${escapeHtml(ended)}</span></div>` : ''}
+                    </div>
+                    <div class="row-right">
+                        <span class="badge ${badgeClass}">${escapeHtml(statusLabel(item.status))}</span>
+                        ${link ? `<a class="btn" href="${link}" target="_blank" rel="noreferrer">源消息</a>` : ''}
+                    </div>
+                    <div class="row-actions">${actions.join('')}</div>
+                </li>`;
         }
 
-        // Update pagination controls
-        function updatePagination(totalPages) {
-            const prevBtn = document.getElementById('prev-page');
-            const nextBtn = document.getElementById('next-page');
-            const pageBtnsContainer = document.getElementById('page-buttons');
+        function renderActive() {
+            const list = $('#activeList');
+            const tasks = state.activeTasks.slice();
+            tasks.sort((a, b) => {
+                if (a.status !== b.status) return a.status === 'downloading' ? -1 : 1;
+                return 0;
+            });
+            if (!tasks.length) {
+                list.innerHTML = `<li class="empty"><svg viewBox="0 0 24 24"><path d="M12 3C6.48 3 2 7.48 2 13h2a8 8 0 1 1 8 8v2c5.52 0 10-4.48 10-10S17.52 3 12 3Zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H11Z"/></svg><div>暂无正在进行的下载</div></li>`;
+            } else {
+                list.innerHTML = tasks.map(t => taskRowHtml(t)).join('');
+            }
+            $('#tabActiveCount').textContent = tasks.length;
+            $('#activeTotal').textContent = tasks.length;
+        }
 
-            // Clear existing page buttons
-            pageBtnsContainer.innerHTML = '';
+        function renderHistory() {
+            const list = $('#historyList');
+            if (!state.history.length) {
+                list.innerHTML = `<li class="empty"><svg viewBox="0 0 24 24"><path d="M12 3A9 9 0 0 0 3 12H0l4 4 4-4H5a7 7 0 1 1 2.05 4.95L5.64 18.36A9 9 0 1 0 12 3Zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H11Z"/></svg><div>暂无匹配的历史记录</div></li>`;
+            } else {
+                list.innerHTML = state.history.map(historyRowHtml).join('');
+            }
+            $('#historyTotal').textContent = state.total;
+            $('#pagerInfo').textContent = state.total
+                ? `第 ${state.page} / ${Math.max(1, state.pages)} 页 · 共 ${state.total} 条`
+                : '无记录';
+            $('#pagePrev').disabled = state.page <= 1;
+            $('#pageNext').disabled = state.page >= state.pages;
+            // 每次重渲染后重置批量工具条（新的 checkbox 都是未选中状态）
+            if (typeof updateBatchBar === 'function') updateBatchBar();
+        }
 
-            // Create page buttons
-            for (let i = 1; i <= totalPages; i++) {
-                const btn = document.createElement('button');
-                btn.className = `page-btn ${i === currentPage ? 'active' : ''}`;
-                btn.textContent = i;
-                btn.dataset.page = i;
+        async function loadStatus() {
+            try {
+                const d = await apiFetch('/api/status');
+                renderStats(d);
+                if (typeof d.authorized === 'boolean') setAuthorized(d.authorized);
+            } catch (e) {
+                setConnection(false);
+            }
+        }
 
+        async function loadActive() {
+            try {
+                const d = await apiFetch('/api/tasks');
+                state.activeTasks = d.tasks || [];
+                renderActive();
+            } catch (e) {
+                toast('加载当前任务失败: ' + e.message, 'error');
+            }
+        }
+
+        async function loadHistory() {
+            try {
+                const q = new URLSearchParams();
+                q.set('page', state.page);
+                q.set('per_page', state.perPage);
+                if (state.filters.filename) q.set('filename', state.filters.filename);
+                if (state.filters.file_type) q.set('file_type', state.filters.file_type);
+                if (state.filters.status) q.set('status', state.filters.status);
+                if (state.filters.sort_by) q.set('sort_by', state.filters.sort_by);
+                if (state.filters.sort_dir) q.set('sort_dir', state.filters.sort_dir);
+                const d = await apiFetch('/api/history?' + q.toString());
+                state.history = d.history || [];
+                state.total = d.total || 0;
+                state.pages = d.pages || 1;
+                renderHistory();
+            } catch (e) {
+                toast('加载历史失败: ' + e.message, 'error');
+            }
+        }
+
+        async function refreshAll() {
+            await Promise.all([
+                loadStatus(),
+                loadActive(),
+                state.tab === 'history' ? loadHistory() : Promise.resolve()
+            ]);
+        }
+
+        async function cancelTask(id) {
+            const { ok } = await confirmModal({
+                title: '取消任务',
+                message: '确认取消该任务？正在进行中的分片会被中止。',
+                okText: '取消任务',
+                okVariant: 'danger',
+            });
+            if (!ok) return;
+            try {
+                await apiFetch('/api/cancel?task_id=' + encodeURIComponent(id), { method: 'POST' });
+                toast('已请求取消', 'success');
+                await refreshAll();
+            } catch (e) {
+                toast('取消失败: ' + e.message, 'error');
+            }
+        }
+
+        async function retryTask(id) {
+            try {
+                const d = await apiFetch('/api/retry?task_id=' + encodeURIComponent(id), { method: 'POST' });
+                toast('已重新排队: ' + (d.filename || ''), 'success');
+                await refreshAll();
+            } catch (e) {
+                toast('重试失败: ' + e.message, 'error');
+            }
+        }
+
+        async function deleteTask(id, filename, status) {
+            let deleteFile = '0';
+            if (status === 'completed') {
+                const res = await confirmModal({
+                    title: '删除记录',
+                    message: `确认删除该记录？\n文件名：${filename}`,
+                    extra: { text: '同时删除磁盘上的文件', checked: true },
+                    okText: '删除',
+                    okVariant: 'danger',
+                });
+                if (!res.ok) return;
+                deleteFile = res.extra ? '1' : '0';
+            } else {
+                const res = await confirmModal({
+                    title: '删除记录',
+                    message: `确认删除该记录？\n文件名：${filename}`,
+                    okText: '删除',
+                    okVariant: 'danger',
+                });
+                if (!res.ok) return;
+            }
+            try {
+                await apiFetch(`/api/delete?task_id=${encodeURIComponent(id)}&filename=${encodeURIComponent(filename)}&delete_file=${deleteFile}`, { method: 'DELETE' });
+                toast('已删除', 'success');
+                await refreshAll();
+            } catch (e) {
+                toast('删除失败: ' + e.message, 'error');
+            }
+        }
+
+        // ---------- 批量选择 ----------
+        function updateBatchBar() {
+            const selected = $$('#historyList input[data-batch]:checked');
+            const bar = $('#batchBar');
+            bar.style.display = selected.length ? 'flex' : 'none';
+            $('#batchSelectedCount').textContent = `已选 ${selected.length} 项`;
+            // 同步"全选本页"勾选框
+            const all = $$('#historyList input[data-batch]');
+            const sa = $('#batchSelectAll');
+            if (all.length && selected.length === all.length) { sa.checked = true; sa.indeterminate = false; }
+            else if (selected.length) { sa.checked = false; sa.indeterminate = true; }
+            else { sa.checked = false; sa.indeterminate = false; }
+        }
+
+        async function batchDelete() {
+            const boxes = $$('#historyList input[data-batch]:checked');
+            if (!boxes.length) return;
+            const items = boxes.map(b => ({
+                id: b.dataset.id,
+                filename: b.dataset.name || '',
+                status: b.dataset.status || '',
+            }));
+            const hasCompleted = items.some(it => it.status === 'completed');
+            const res = await confirmModal({
+                title: '批量删除',
+                message: `即将删除 ${items.length} 条记录。此操作不可撤销。`,
+                extra: hasCompleted ? { text: '同时删除磁盘上的文件（仅对已完成项有效）', checked: true } : null,
+                okText: '全部删除',
+                okVariant: 'danger',
+            });
+            if (!res.ok) return;
+            const deleteFile = res.extra ? '1' : '0';
+            let success = 0, failed = 0;
+            for (const it of items) {
+                try {
+                    const flag = it.status === 'completed' ? deleteFile : '0';
+                    await apiFetch(`/api/delete?task_id=${encodeURIComponent(it.id)}&filename=${encodeURIComponent(it.filename)}&delete_file=${flag}`, { method: 'DELETE' });
+                    success++;
+                } catch (_e) {
+                    failed++;
+                }
+            }
+            toast(`已删除 ${success} 项${failed ? `，失败 ${failed} 项` : ''}`, failed ? 'error' : 'success');
+            await refreshAll();
+        }
+
+        function openRename(id, name) {
+            const dot = name.lastIndexOf('.');
+            const base = dot > 0 ? name.substring(0, dot) : name;
+            $('#renameInput').value = base;
+            $('#renameSubmit').dataset.id = id;
+            openModal('renameModal');
+            setTimeout(() => $('#renameInput').focus(), 60);
+        }
+
+        async function submitRename() {
+            const id = $('#renameSubmit').dataset.id;
+            const newName = ($('#renameInput').value || '').trim();
+            if (!newName) { toast('请输入新文件名', 'error'); return; }
+            try {
+                await apiFetch(`/api/rename?task_id=${encodeURIComponent(id)}&new_filename=${encodeURIComponent(newName)}`, { method: 'POST' });
+                toast('已重命名', 'success');
+                closeModal('renameModal');
+                await loadHistory();
+            } catch (e) {
+                toast('重命名失败: ' + e.message, 'error');
+            }
+        }
+
+        function openModal(id) { $('#' + id).classList.add('show'); }
+        function closeModal(id) { $('#' + id).classList.remove('show'); }
+
+        // ---------- 通用确认 Modal ----------
+        // 用法: const res = await confirmModal({title, message, extra?: {text, checked?}, okText?, okVariant?})
+        //  - 返回: { ok: boolean, extra: boolean }
+        //  - 比原生 confirm() 更可控，也避开 iOS Safari 的原生弹框阻塞
+        function confirmModal(opts) {
+            const {
+                title = '确认',
+                message = '',
+                extra = null,           // {text: string, checked?: boolean}
+                okText = '确定',
+                okVariant = 'primary',  // primary | danger
+            } = opts || {};
+            return new Promise((resolve) => {
+                $('#confirmTitle').textContent = title;
+                $('#confirmMessage').textContent = message;
+                const label = $('#confirmExtraLabel');
+                const cb = $('#confirmExtraCheckbox');
+                if (extra && extra.text) {
+                    label.style.display = 'flex';
+                    $('#confirmExtraText').textContent = extra.text;
+                    cb.checked = !!extra.checked;
+                } else {
+                    label.style.display = 'none';
+                    cb.checked = false;
+                }
+                const okBtn = $('#confirmOkBtn');
+                okBtn.classList.remove('primary', 'danger');
+                okBtn.classList.add(okVariant === 'danger' ? 'danger' : 'primary');
+                okBtn.textContent = okText;
+
+                const cleanup = () => {
+                    okBtn.removeEventListener('click', onOk);
+                    $('#confirmCancelBtn').removeEventListener('click', onCancel);
+                    document.removeEventListener('keydown', onKey);
+                };
+                const onOk = () => { cleanup(); closeModal('confirmModal'); resolve({ ok: true, extra: cb.checked }); };
+                const onCancel = () => { cleanup(); closeModal('confirmModal'); resolve({ ok: false, extra: false }); };
+                const onKey = (e) => {
+                    if (e.key === 'Escape') onCancel();
+                    else if (e.key === 'Enter') onOk();
+                };
+                okBtn.addEventListener('click', onOk);
+                $('#confirmCancelBtn').addEventListener('click', onCancel);
+                document.addEventListener('keydown', onKey);
+                openModal('confirmModal');
+                setTimeout(() => okBtn.focus(), 80);
+            });
+        }
+
+        // ---------- Lightbox 预览 ----------
+        function openLightbox(src, title, downloadHref) {
+            const img = $('#lightboxImg');
+            img.src = src;
+            $('#lightboxTitle').textContent = title || '';
+            const dl = $('#lightboxDownload');
+            if (downloadHref) { dl.style.display = ''; dl.href = downloadHref; }
+            else { dl.style.display = 'none'; }
+            openModal('lightboxModal');
+        }
+
+        function setConnection(online) {
+            state.socketConnected = online;
+            const el = $('#connIndicator');
+            el.classList.toggle('online', online);
+            el.classList.toggle('offline', !online);
+            $('#connLabel').textContent = online ? '实时连接' : '离线';
+        }
+
+        let socket = null;
+        function initSocket() {
+            try {
+                socket = io({ transports: ['websocket', 'polling'], reconnection: true });
+                socket.on('connect', () => setConnection(true));
+                socket.on('disconnect', () => setConnection(false));
+                socket.on('connect_error', () => setConnection(false));
+                socket.on('status_update', (data) => {
+                    renderStats({
+                        active_downloads: data.active_downloads,
+                        queue_size: data.queue_size,
+                        total_tasks: data.total_tasks,
+                        total_download_speed_mbps: data.total_download_speed_mbps,
+                    });
+                    loadActive();
+                });
+                socket.on('new_task', () => {
+                    loadActive();
+                    if (state.tab === 'history') loadHistory();
+                });
+                socket.on('download_progress', (data) => {
+                    const tid = String(data.task_id);
+                    const t = state.activeTasks.find(x => String(x.task_id) === tid);
+                    if (t) {
+                        t.progress = `${(data.progress || 0).toFixed(2)} % (${data.received} / ${data.total})`;
+                        t.status = data.status || 'downloading';
+                        renderActive();
+                    } else {
+                        loadActive();
+                    }
+                });
+            } catch (e) {
+                setConnection(false);
+            }
+        }
+
+        function setAuthorized(authorized) {
+            state.authorized = !!authorized;
+            const card = $('#authCard');
+            if (state.authorized) {
+                card.style.display = 'none';
+            } else {
+                card.style.display = '';
+                loadAuthStatus();
+            }
+        }
+
+        async function loadAuthStatus() {
+            try {
+                const d = await apiFetch('/api/auth/status');
+                $('#authBadge').textContent = d.authorized ? '已登录' : (d.awaiting_code ? '等待验证码' : '未登录');
+                $('#authMessage').textContent = d.message || '请登录 Telegram 账号';
+                $('#authCodeBlock').style.display = d.awaiting_code ? '' : 'none';
+                $('#authPwdBlock').style.display = d.requires_password ? '' : 'none';
+                if (d.phone && !$('#authPhone').value) $('#authPhone').value = d.phone;
+            } catch (e) { /* ignore */ }
+        }
+
+        async function authSendCode() {
+            const phone = ($('#authPhone').value || '').trim();
+            if (!phone) { toast('请输入手机号', 'error'); return; }
+            try {
+                await apiFetch('/api/auth/send-code', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({phone})
+                });
+                toast('验证码已发送', 'success');
+                await loadAuthStatus();
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        async function authVerifyCode() {
+            const phone = ($('#authPhone').value || '').trim();
+            const code = ($('#authCode').value || '').trim();
+            if (!phone || !code) { toast('手机号和验证码都要填', 'error'); return; }
+            try {
+                await apiFetch('/api/auth/verify-code', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({phone, code})
+                });
+                toast('验证成功', 'success');
+                await loadAuthStatus();
+                await loadStatus();
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        async function authVerifyPassword() {
+            const password = $('#authPassword').value || '';
+            if (!password) { toast('请输入密码', 'error'); return; }
+            try {
+                await apiFetch('/api/auth/verify-password', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({password})
+                });
+                toast('登录成功', 'success');
+                await loadAuthStatus();
+                await loadStatus();
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        function bindEvents() {
+            $$('.tab').forEach(btn => {
                 btn.addEventListener('click', () => {
-                    currentPage = parseInt(btn.dataset.page);
-                    initializeTasks(); // Re-fetch data for the new page
+                    $$('.tab').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    const name = btn.dataset.tab;
+                    state.tab = name;
+                    $('#tabActive').style.display = name === 'active' ? '' : 'none';
+                    $('#tabHistory').style.display = name === 'history' ? '' : 'none';
+                    if (name === 'history') loadHistory();
                 });
+            });
 
-                pageBtnsContainer.appendChild(btn);
+            $('#btnRefresh').addEventListener('click', () => refreshAll());
+
+            let searchTimer = null;
+            $('#searchInput').addEventListener('input', (e) => {
+                clearTimeout(searchTimer);
+                searchTimer = setTimeout(() => {
+                    state.filters.filename = e.target.value.trim();
+                    state.page = 1;
+                    loadHistory();
+                }, 300);
+            });
+
+            $('#filterType').addEventListener('change', (e) => {
+                state.filters.file_type = e.target.value;
+                state.page = 1;
+                loadHistory();
+            });
+            $('#filterStatus').addEventListener('change', (e) => {
+                state.filters.status = e.target.value;
+                state.page = 1;
+                loadHistory();
+            });
+            $('#sortBy').addEventListener('change', (e) => {
+                const [sb, sd] = e.target.value.split('|');
+                state.filters.sort_by = sb;
+                state.filters.sort_dir = sd;
+                state.page = 1;
+                loadHistory();
+            });
+
+            $('#pagePrev').addEventListener('click', () => {
+                if (state.page > 1) { state.page--; loadHistory(); }
+            });
+            $('#pageNext').addEventListener('click', () => {
+                if (state.page < state.pages) { state.page++; loadHistory(); }
+            });
+
+            // 每页条数
+            const perPageSel = $('#perPageSelect');
+            if (perPageSel) {
+                perPageSel.value = String(state.perPage);
+                perPageSel.addEventListener('change', (e) => {
+                    const v = parseInt(e.target.value, 10);
+                    if (v > 0) {
+                        state.perPage = v;
+                        state.page = 1;
+                        try { localStorage.setItem('tdd.perPage', String(v)); } catch (_) {}
+                        loadHistory();
+                    }
+                });
+                try {
+                    const saved = parseInt(localStorage.getItem('tdd.perPage') || '', 10);
+                    if (saved > 0) {
+                        state.perPage = saved;
+                        perPageSel.value = String(saved);
+                    }
+                } catch (_) {}
             }
 
-            // Update prev/next buttons
-            prevBtn.disabled = currentPage === 1;
-            nextBtn.disabled = currentPage === totalPages || totalPages === 0;
-        }
-
-        // Event listeners
-        document.addEventListener('DOMContentLoaded', () => {
-            if (authState.resend_available_in) {
-                startSendCodeCooldown(authState.resend_available_in);
-            }
-            renderTelegramUserPanel();
-            renderChannelPanel();
-            renderAuthPanel();
-
-            document.getElementById('retry-modal-cancel').addEventListener('click', closeRetryModal);
-            document.getElementById('retry-modal-confirm').addEventListener('click', confirmRetryModal);
-            document.getElementById('retry-modal').addEventListener('click', (event) => {
-                if (event.target.id === 'retry-modal') {
-                    closeRetryModal();
-                }
+            // 批量选择：勾选/全选/清空/批量删除
+            $('#historyList').addEventListener('change', (e) => {
+                if (e.target.matches('input[data-batch]')) updateBatchBar();
             });
-            document.getElementById('retry-modal-input').addEventListener('keydown', (event) => {
-                if (event.key === 'Enter') {
-                    event.preventDefault();
-                    confirmRetryModal();
-                } else if (event.key === 'Escape') {
-                    closeRetryModal();
-                }
+            $('#batchSelectAll').addEventListener('change', (e) => {
+                const on = e.target.checked;
+                $$('#historyList input[data-batch]').forEach(cb => { cb.checked = on; });
+                updateBatchBar();
             });
-            document.getElementById('action-modal-cancel').addEventListener('click', closeActionModal);
-            document.getElementById('action-modal-confirm').addEventListener('click', confirmActionModal);
-            document.getElementById('action-modal').addEventListener('click', (event) => {
-                if (event.target.id === 'action-modal') {
-                    closeActionModal();
-                }
+            $('#batchClearBtn').addEventListener('click', () => {
+                $$('#historyList input[data-batch]').forEach(cb => { cb.checked = false; });
+                updateBatchBar();
             });
-            document.getElementById('action-modal-input').addEventListener('keydown', (event) => {
-                if (event.key === 'Enter') {
-                    event.preventDefault();
-                    confirmActionModal();
-                } else if (event.key === 'Escape') {
-                    closeActionModal();
-                }
-            });
+            $('#batchDeleteBtn').addEventListener('click', batchDelete);
 
-            // Apply filter button
-            document.getElementById('apply-filter').addEventListener('click', applyFilters);
-
-            // Reset filter button
-            document.getElementById('reset-filter').addEventListener('click', resetFilters);
-
-            // Previous page button
-            document.getElementById('prev-page').addEventListener('click', () => {
-                if (currentPage > 1) {
-                    currentPage--;
-                    initializeTasks();
-                }
-            });
-
-            // Next page button
-            document.getElementById('next-page').addEventListener('click', () => {
-                if (currentPage < totalPages) {
-                    currentPage++;
-                    initializeTasks();
-                }
-            });
-
-            // Real-time filename filter (debounced)
-            let filenameTimeout;
-            document.getElementById('filename-filter').addEventListener('input', () => {
-                clearTimeout(filenameTimeout);
-                filenameTimeout = setTimeout(applyFilters, 3000);
-            });
-
-            // File type filter change
-            document.getElementById('filetype-filter').addEventListener('change', applyFilters);
-
-            // Status filter change
-            document.getElementById('status-filter').addEventListener('change', applyFilters);
-
-            // Items per page change
-            document.getElementById('items-per-page').addEventListener('change', applyFilters);
-        });
-
-        // Initial updates
-        refreshAuthStatus();
-        updateStatusData();
-        initializeTasks();
-
-        // Download file function
-        function downloadFile(taskId, filename) {
-            const downloadUrl = `/api/download?task_id=${encodeURIComponent(taskId)}&filename=${encodeURIComponent(filename)}`;
-            const link = document.createElement('a');
-            link.href = downloadUrl;
-            link.download = filename;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            showToast(`Download started: ${filename}`);
-        }
-
-        // Delete file function with confirmation
-        function deleteFile(task) {
-            const shouldOfferFileDelete = task.status === 'completed' && Boolean(task.downloadPath);
-            openActionModal({
-                title: 'Delete File',
-                description: shouldOfferFileDelete
-                    ? `You can remove "${task.filename}" from disk as well, or keep the file and only delete this record.`
-                    : `This will remove "${task.filename}" from the task history.`,
-                confirmText: 'Delete',
-                option: shouldOfferFileDelete ? {
-                    checked: true,
-                    label: 'Also delete the downloaded file from disk',
-                } : null,
-                onConfirm: async (_unusedValue, deleteFileFromDisk) => {
-                    try {
-                        const query = new URLSearchParams({
-                            task_id: task.id,
-                            filename: task.filename,
-                            delete_file: shouldOfferFileDelete && deleteFileFromDisk ? '1' : '0',
-                        });
-                        await apiRequest(`/api/delete?${query.toString()}`, {
-                            method: 'DELETE'
-                        });
-                        closeActionModal();
-                        await initializeTasks();
-                        showToast(shouldOfferFileDelete && deleteFileFromDisk ? `Deleted file and record: ${task.filename}` : `Deleted record: ${task.filename}`);
-                    } catch (error) {
-                        console.error('Error deleting file:', error);
-                        showToast(`Failed to delete file: ${error.message}`, 'error');
+            document.addEventListener('click', (e) => {
+                const t = e.target.closest('[data-action]');
+                if (t) {
+                    const action = t.dataset.action;
+                    const id = t.dataset.id;
+                    if (action === 'cancel') cancelTask(id);
+                    else if (action === 'retry') retryTask(id);
+                    else if (action === 'delete') deleteTask(id, t.dataset.name || '', t.dataset.status || '');
+                    else if (action === 'rename') openRename(id, t.dataset.name || '');
+                    else if (action === 'preview') {
+                        // Lightbox 打开原图；后端 /api/download 已经是原图
+                        const fname = t.dataset.name || '';
+                        const histId = 'history-' + id;
+                        const orig = `/api/download?task_id=${encodeURIComponent(histId)}&filename=${encodeURIComponent(fname)}`;
+                        openLightbox(orig, fname, orig);
                     }
                 }
+                const closer = e.target.closest('[data-close-modal]');
+                if (closer) closeModal(closer.dataset.closeModal);
+            });
+
+            $$('.modal-mask').forEach(mask => {
+                mask.addEventListener('click', (e) => {
+                    if (e.target === mask) mask.classList.remove('show');
+                });
+            });
+
+            $('#renameSubmit').addEventListener('click', submitRename);
+
+            $('#authSendBtn').addEventListener('click', authSendCode);
+            $('#authVerifyBtn').addEventListener('click', authVerifyCode);
+            $('#authPwdBtn').addEventListener('click', authVerifyPassword);
+
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden) refreshAll();
             });
         }
 
-        function renameFile(taskId, filename) {
-            openActionModal({
-                title: 'Rename File',
-                description: `Choose a new filename for "${filename}". Existing category and directory rules stay unchanged.`,
-                confirmText: 'Save Name',
-                input: {
-                    label: 'New filename',
-                    value: filename,
-                    placeholder: 'Enter a new filename',
-                    hint: 'Only the filename changes. The saved directory stays the same.',
-                },
-                onConfirm: async (rawValue) => {
-                    const newFilename = rawValue.trim();
-                    if (!newFilename) {
-                        showToast('Filename cannot be empty', 'error');
-                        return;
-                    }
-                    if (newFilename === filename) {
-                        closeActionModal();
-                        return;
-                    }
-
-                    try {
-                        await apiRequest(`/api/rename?task_id=${encodeURIComponent(taskId)}&new_filename=${encodeURIComponent(newFilename)}`, {
-                            method: 'POST'
-                        });
-                        closeActionModal();
-                        await initializeTasks();
-                        showToast(`Renamed successfully: ${newFilename}`);
-                    } catch (error) {
-                        console.error('Error renaming file:', error);
-                        showToast(`Failed to rename file: ${error.message}`, 'error');
-                    }
-                }
-            });
+        function boot() {
+            bindEvents();
+            setAuthorized(authBootstrap.authorized);
+            refreshAll();
+            initSocket();
+            setInterval(() => {
+                if (!state.socketConnected) refreshAll();
+                else loadStatus();
+            }, 10000);
         }
 
-        // Set intervals - reduce API calls frequency
-        setInterval(updateStatusData, 30000); // Update status data every 30 seconds
-        setInterval(refreshAuthStatus, 15000);
-        // setInterval(initializeTasks, 10000); // Update tasks every 10 seconds
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', boot);
+        } else {
+            boot();
+        }
+    })();
     </script>
 </body>
-
 </html>
