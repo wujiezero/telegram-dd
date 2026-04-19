@@ -360,7 +360,28 @@
             flex-shrink: 0;
         }
 
+        .row-thumb-btn {
+            width: 100%;
+            height: 100%;
+            padding: 0;
+            margin: 0;
+            border: none;
+            background: transparent;
+            color: inherit;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+
         .row-thumb img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .row-thumb-btn img {
             width: 100%;
             height: 100%;
             object-fit: cover;
@@ -383,6 +404,26 @@
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+        }
+
+        .row-name-btn {
+            padding: 0;
+            margin: 0;
+            border: none;
+            background: transparent;
+            color: inherit;
+            font: inherit;
+            font-weight: inherit;
+            text-align: left;
+            width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+
+        .row-name-btn:hover {
+            color: var(--accent);
         }
 
         .row-meta {
@@ -542,10 +583,29 @@
             color: var(--text-2);
         }
 
+        .pager-size-control {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+        }
+
+        .pager-size-control::after {
+            content: "";
+            position: absolute;
+            right: 12px;
+            width: 14px;
+            height: 14px;
+            pointer-events: none;
+            background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'><path fill='%23aab6c3' d='M5 7l5 6 5-6z'/></svg>");
+            background-repeat: no-repeat;
+            background-position: center;
+            background-size: 14px;
+        }
+
         .pager-size-select {
-            min-width: 72px;
+            min-width: 84px;
             height: 40px;
-            padding: 0 34px 0 14px;
+            padding: 0 34px 0 16px;
             border-radius: 14px;
             border: 1px solid var(--line);
             background-color: var(--bg-2);
@@ -557,11 +617,9 @@
             text-align-last: center;
             -webkit-appearance: none;
             appearance: none;
-            background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'><path fill='%23aab6c3' d='M5 7l5 6 5-6z'/></svg>");
-            background-repeat: no-repeat;
-            background-position: right 10px center;
-            background-size: 14px;
+            background-image: none;
             box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+            cursor: pointer;
         }
 
         .pager-size-select:focus {
@@ -951,12 +1009,14 @@
                 <div class="pager-nav">
                     <label class="pager-size">
                         <span class="pager-size-label">每页</span>
-                        <select class="pager-size-select" id="perPageSelect" aria-label="每页条数">
-                            <option value="10">10</option>
-                            <option value="20">20</option>
-                            <option value="50">50</option>
-                            <option value="100">100</option>
-                        </select>
+                        <span class="pager-size-control">
+                            <select class="pager-size-select" id="perPageSelect" aria-label="每页条数">
+                                <option value="10">10</option>
+                                <option value="20">20</option>
+                                <option value="50">50</option>
+                                <option value="100">100</option>
+                            </select>
+                        </span>
                         <span class="pager-size-unit">条</span>
                     </label>
                     <button class="btn" id="pagePrev">上一页</button>
@@ -1287,21 +1347,27 @@
             }
 
             const previewKind = getPreviewKind(item, iconType);
+            const canPreview = item.status === 'completed' && !!previewKind;
+            const previewAttrs = canPreview
+                ? ` data-action="preview" data-preview-kind="${previewKind}" data-id="${item.id}" data-name="${escapeHtml(item.filename)}"`
+                : '';
             const thumbImgSrc = item.thumbnail_path ? `/api/thumbnail?task_id=${item.id}` : '';
             let thumb;
             if (item.status === 'completed' && item.thumbnail_path) {
-                if (previewKind) {
-                    const cursor = previewKind === 'video' ? 'pointer' : 'zoom-in';
-                    thumb = `<button type="button" class="row-thumb-btn" data-action="preview" data-preview-kind="${previewKind}" data-id="${item.id}" data-name="${escapeHtml(item.filename)}" style="all:unset; cursor:${cursor}; display:block; width:100%; height:100%"><img loading="lazy" src="${thumbImgSrc}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{innerHTML:this.dataset.fallback}))" data-fallback="${escapeHtml(fileIcon(iconType))}"></button>`;
+                if (canPreview) {
+                    thumb = `<button type="button" class="row-thumb-btn"${previewAttrs}><img loading="lazy" src="${thumbImgSrc}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{innerHTML:this.dataset.fallback}))" data-fallback="${escapeHtml(fileIcon(iconType))}"></button>`;
                 } else {
                     thumb = `<img loading="lazy" src="${thumbImgSrc}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{innerHTML:this.dataset.fallback}))" data-fallback="${escapeHtml(fileIcon(iconType))}">`;
                 }
-            } else if (previewKind) {
-                const cursor = previewKind === 'video' ? 'pointer' : 'zoom-in';
-                thumb = `<button type="button" class="row-thumb-btn" data-action="preview" data-preview-kind="${previewKind}" data-id="${item.id}" data-name="${escapeHtml(item.filename)}" style="all:unset; cursor:${cursor}; display:flex; width:100%; height:100%; align-items:center; justify-content:center">${fileIcon(iconType)}</button>`;
+            } else if (canPreview) {
+                thumb = `<button type="button" class="row-thumb-btn"${previewAttrs}>${fileIcon(iconType)}</button>`;
             } else {
                 thumb = fileIcon(iconType);
             }
+
+            const titleHtml = canPreview
+                ? `<button type="button" class="row-name row-name-btn"${previewAttrs} title="${name}">${name}</button>`
+                : `<div class="row-name" title="${name}">${name}</div>`;
 
             const checkbox = `<label class="row-select" style="display:inline-flex; align-items:center; padding:0 4px 0 8px"><input type="checkbox" data-batch data-id="${item.id}" data-name="${escapeHtml(item.filename)}" data-status="${escapeHtml(item.status||'')}"></label>`;
 
@@ -1310,7 +1376,7 @@
                     ${checkbox}
                     <div class="row-thumb">${thumb}</div>
                     <div class="row-main">
-                        <div class="row-name" title="${name}">${name}</div>
+                        ${titleHtml}
                         <div class="row-meta">${metaHtml}</div>
                         ${progressHtml}
                         ${err ? `<div class="row-meta" style="color:var(--danger)" title="${err}">${err.length > 120 ? err.slice(0,120)+'…' : err}</div>` : ''}
@@ -1825,6 +1891,7 @@
                     else if (action === 'delete') deleteTask(id, t.dataset.name || '', t.dataset.status || '');
                     else if (action === 'rename') openRename(id, t.dataset.name || '');
                     else if (action === 'preview') {
+                        e.preventDefault();
                         // 历史记录里的图片/视频统一走 inline 预览接口；下载按钮仍走 /api/download
                         const fname = t.dataset.name || '';
                         const histId = 'history-' + id;
