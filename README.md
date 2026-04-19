@@ -66,6 +66,8 @@ Android: apk
 | `TELEGRAM_DAEMON_PROXY_RESOLVE_ONCE` | `--proxy-resolve-once` / `--no-proxy-resolve-once` | 启动时只解析一次代理域名并固定本次进程使用的代理 IP，适合 DNS 负载均衡代理 | 0 |
 | `TELEGRAM_DAEMON_LOCK_FILE` |  | 单实例锁文件路径；未设置时优先跟 session 放在同一目录，否则默认 `/tmp/DownloadDaemon.lock` | 自动推导 |
 
+如果在 Docker 里看到 `Permission denied: '/session/DownloadDaemon.lock'`，说明挂载到 `/session` 的宿主目录对容器当前用户不可写。当前版本会自动把锁文件降级到 `/tmp/DownloadDaemon.lock`，服务仍可启动；如果您希望显式指定，也可以设置 `TELEGRAM_DAEMON_LOCK_FILE=/tmp/DownloadDaemon.lock`。注意：这样做后，锁文件不再跟随共享的 session 目录，多容器共用同一份 session 时请务必保证只启动一个实例。
+
 您可以将它们定义为环境变量，或者作为命令行参数，例如：
 
     python telegram-download-daemon.py --api-id <your-id> --api-hash <your-hash> --channel <channel-number>

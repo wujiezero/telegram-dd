@@ -19,6 +19,7 @@ stringSessionFilename = "{0}.session".format(sessionName)
 lockFilename = "{0}.lock".format(sessionName)
 logger = logging.getLogger('telegram-download-daemon.session')
 _lockHandle = None
+_resolvedLockPath = None
 
 
 class SingleInstanceLockError(RuntimeError):
@@ -32,18 +33,45 @@ def _getSessionPath():
     return path.join(TELEGRAM_DAEMON_SESSION_PATH, stringSessionFilename)
 
 
+def _isDirectoryWritable(directory):
+    try:
+        os.makedirs(directory, exist_ok=True)
+        probe_path = path.join(directory, f".{lockFilename}.probe.{os.getpid()}")
+        with open(probe_path, 'a', encoding='utf-8'):
+            pass
+        os.remove(probe_path)
+        return True, None
+    except OSError as exc:
+        return False, exc
+
+
 def _getLockPath():
+    global _resolvedLockPath
+
+    if _resolvedLockPath is not None:
+        return _resolvedLockPath
+
     if TELEGRAM_DAEMON_LOCK_FILE:
         lock_dir = path.dirname(TELEGRAM_DAEMON_LOCK_FILE)
         if lock_dir:
             os.makedirs(lock_dir, exist_ok=True)
-        return TELEGRAM_DAEMON_LOCK_FILE
+        _resolvedLockPath = TELEGRAM_DAEMON_LOCK_FILE
+        return _resolvedLockPath
 
     if TELEGRAM_DAEMON_SESSION_PATH:
-        os.makedirs(TELEGRAM_DAEMON_SESSION_PATH, exist_ok=True)
-        return path.join(TELEGRAM_DAEMON_SESSION_PATH, lockFilename)
+        writable, exc = _isDirectoryWritable(TELEGRAM_DAEMON_SESSION_PATH)
+        if writable:
+            _resolvedLockPath = path.join(TELEGRAM_DAEMON_SESSION_PATH, lockFilename)
+            return _resolvedLockPath
+        logger.warning(
+            "Session directory %s is not writable for lock files (%s); "
+            "falling back to /tmp. Set TELEGRAM_DAEMON_LOCK_FILE to override.",
+            TELEGRAM_DAEMON_SESSION_PATH,
+            exc,
+        )
 
-    return path.join("/tmp", lockFilename)
+    _resolvedLockPath = path.join("/tmp", lockFilename)
+    return _resolvedLockPath
 
 
 def getLockPath():

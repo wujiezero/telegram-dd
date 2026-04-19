@@ -4,14 +4,14 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: telegram-download
-    # read_only 根文件系统；可写位置通过 volumes + tmpfs 限定
-    read_only: true
     environment:
       - TELEGRAM_DAEMON_API_ID=
       - TELEGRAM_DAEMON_API_HASH=
       - TELEGRAM_DAEMON_CHANNEL=
       - TELEGRAM_DAEMON_DEST=/downloads
       - TELEGRAM_DAEMON_SESSION_PATH=/session
+      # 某些 NAS/面板的 bind mount 目录可读但不可创建锁文件；遇到权限问题时可打开这一项。
+      #- TELEGRAM_DAEMON_LOCK_FILE=/tmp/DownloadDaemon.lock
       - TELEGRAM_DAEMON_WORKERS=2
       - TELEGRAM_DAEMON_PROXY_RESOLVE_ONCE=1
       # 开启 Web UI 鉴权；留空则为开放访问（老行为）
