@@ -1600,6 +1600,26 @@
             </div>
         </section>
 
+        <section class="card" id="webAuthCard" style="display:none">
+            <div class="card-header">
+                <div class="card-title">Web UI 访问验证</div>
+                <span class="badge" id="webAuthBadge">待验证</span>
+            </div>
+            <div class="auth-gate">
+                <div class="info-block">
+                    <p id="webAuthMessage" style="margin:0 0 10px;color:var(--text-2);">当前部署开启了页面访问令牌，请先输入 Web Token。</p>
+                    <div class="field">
+                        <label for="webAuthToken">访问令牌</label>
+                        <input id="webAuthToken" type="password" autocomplete="current-password" placeholder="请输入 TELEGRAM_DAEMON_WEB_TOKEN" />
+                    </div>
+                    <div style="display:flex; gap:10px; flex-wrap:wrap">
+                        <button id="webAuthLoginBtn" class="btn primary btn-lg">登录页面</button>
+                        <button id="webAuthClearBtn" class="btn btn-lg">清除本地凭证</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <section class="card" id="authCard" style="display:none">
             <div class="card-header">
                 <div class="card-title">Telegram 登录</div>
@@ -1848,8 +1868,18 @@
             message: {{ auth_state.message|tojson }}
         };
 
+        const WEB_TOKEN_STORAGE_KEY = 'tdd.webToken';
+        const WEB_AUTH_COOKIE_NAME = 'tdd_token';
+        const APP_BASE = (() => {
+            const pathname = window.location.pathname || '/';
+            if (!pathname || pathname === '/') return '';
+            return pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+        })();
+
         const state = {
             authorized: !!authBootstrap.authorized,
+            webAuthRequired: false,
+            webAuthenticated: true,
             tab: 'active',
             activeTasks: [],
             history: [],
@@ -1860,9 +1890,77 @@
             filters: { filename: '', file_type: '', status: '', sort_by: 'start_time', sort_dir: 'desc' },
             socketConnected: false
         };
+        let refreshTimer = null;
 
         const $ = (s, r=document) => r.querySelector(s);
         const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+
+        function appUrl(path) {
+            if (!path) return APP_BASE || '/';
+            if (/^(?:[a-z]+:)?\/\//i.test(path)) return path;
+            const normalized = path.startsWith('/') ? path : `/${path}`;
+            return `${APP_BASE}${normalized}` || '/';
+        }
+
+        function buildUrl(path, params=null, includeToken=false) {
+            const url = new URL(appUrl(path), window.location.origin);
+            if (params && typeof params === 'object') {
+                Object.entries(params).forEach(([key, value]) => {
+                    if (value == null) return;
+                    url.searchParams.set(key, String(value));
+                });
+            }
+            if (includeToken) {
+                const token = getWebAuthToken();
+                if (token && !url.searchParams.has('tdd_token')) {
+                    url.searchParams.set('tdd_token', token);
+                }
+            }
+            return `${url.pathname}${url.search}${url.hash}`;
+        }
+
+        function readCookie(name) {
+            const cookie = document.cookie
+                .split('; ')
+                .find((row) => row.startsWith(`${name}=`));
+            if (!cookie) return '';
+            return decodeURIComponent(cookie.substring(name.length + 1));
+        }
+
+        function getStoredWebToken() {
+            try {
+                return sessionStorage.getItem(WEB_TOKEN_STORAGE_KEY) || '';
+            } catch (_e) {
+                return '';
+            }
+        }
+
+        function setStoredWebToken(token) {
+            try {
+                if (token) sessionStorage.setItem(WEB_TOKEN_STORAGE_KEY, token);
+                else sessionStorage.removeItem(WEB_TOKEN_STORAGE_KEY);
+            } catch (_e) { /* ignore */ }
+        }
+
+        function clearStoredWebToken() {
+            setStoredWebToken('');
+        }
+
+        function syncStoredWebTokenFromCookie() {
+            const cookieToken = readCookie(WEB_AUTH_COOKIE_NAME);
+            if (cookieToken) {
+                setStoredWebToken(cookieToken);
+            }
+            return cookieToken;
+        }
+
+        function getWebAuthToken() {
+            return getStoredWebToken() || readCookie(WEB_AUTH_COOKIE_NAME);
+        }
+
+        function isWebAuthReady() {
+            return !state.webAuthRequired || state.webAuthenticated;
+        }
 
         // -----------------------------
         // 主题切换（浅色 / 深色）
@@ -1976,20 +2074,42 @@
             }
         }
 
+        function handleAuthFailure(message='页面访问验证已失效，请重新输入 Web Token。') {
+            state.webAuthRequired = true;
+            state.webAuthenticated = false;
+            setConnection(false);
+            renderWebAuthCard({ message });
+        }
+
         async function apiFetch(url, opts={}) {
-            const res = await fetch(url, opts);
+            const fetchOpts = { ...opts };
+            const rawResponse = !!fetchOpts.rawResponse;
+            delete fetchOpts.rawResponse;
+
+            const headers = new Headers(fetchOpts.headers || {});
+            const token = getWebAuthToken();
+            if (token) {
+                headers.set('Authorization', `Bearer ${token}`);
+                headers.set('X-TDD-Auth', token);
+            }
+            fetchOpts.headers = headers;
+
+            const res = await fetch(appUrl(url), fetchOpts);
             const contentType = res.headers.get('content-type') || '';
             let data = null;
             if (contentType.includes('application/json')) {
                 data = await res.json();
-            } else if (!opts.rawResponse) {
+            } else if (!rawResponse) {
                 data = { ok: res.ok };
             }
             if (!res.ok) {
                 const err = (data && data.error) ? data.error : `HTTP ${res.status}`;
-                throw new Error(err);
+                const error = new Error(err);
+                error.status = res.status;
+                error.response = data;
+                throw error;
             }
-            return data;
+            return rawResponse ? res : data;
         }
 
         function fileIcon(type) {
@@ -2125,7 +2245,10 @@
             // 按钮按重要性排序：下载/重试（主按钮）> 取消/删除（危险）> 重命名（次要）> 源消息（次要）
             const actions = [];
             if (item.status === 'completed') {
-                const downloadHref = `/api/download?task_id=${encodeURIComponent(id)}&filename=${encodeURIComponent(item.filename)}`;
+                const downloadHref = buildUrl('/api/download', {
+                    task_id: id,
+                    filename: item.filename
+                }, true);
                 actions.push(`<button type="button" class="btn primary" data-action="download" data-href="${escapeHtml(downloadHref)}" data-name="${escapeHtml(item.filename)}">下载</button>`);
             }
             if (item.status === 'failed' || item.status === 'cancelled') {
@@ -2152,7 +2275,7 @@
             const previewAttrs = canPreview
                 ? ` data-action="preview" data-preview-kind="${previewKind}" data-id="${item.id}" data-name="${escapeHtml(item.filename)}"`
                 : '';
-            const thumbImgSrc = item.thumbnail_path ? `/api/thumbnail?task_id=${item.id}` : '';
+            const thumbImgSrc = item.thumbnail_path ? buildUrl('/api/thumbnail', { task_id: item.id }, true) : '';
             let thumb;
             if (item.status === 'completed' && item.thumbnail_path) {
                 if (canPreview) {
@@ -2224,26 +2347,37 @@
         }
 
         async function loadStatus() {
+            if (!isWebAuthReady()) return;
             try {
                 const d = await apiFetch('/api/status');
                 renderStats(d);
                 if (typeof d.authorized === 'boolean') setAuthorized(d.authorized);
             } catch (e) {
+                if (e.status === 401) {
+                    handleAuthFailure();
+                    return;
+                }
                 setConnection(false);
             }
         }
 
         async function loadActive() {
+            if (!isWebAuthReady()) return;
             try {
                 const d = await apiFetch('/api/tasks');
                 state.activeTasks = d.tasks || [];
                 renderActive();
             } catch (e) {
+                if (e.status === 401) {
+                    handleAuthFailure();
+                    return;
+                }
                 toast('加载当前任务失败: ' + e.message, 'error');
             }
         }
 
         async function loadHistory() {
+            if (!isWebAuthReady()) return;
             try {
                 const q = new URLSearchParams();
                 q.set('page', state.page);
@@ -2259,11 +2393,16 @@
                 state.pages = d.pages || 1;
                 renderHistory();
             } catch (e) {
+                if (e.status === 401) {
+                    handleAuthFailure();
+                    return;
+                }
                 toast('加载历史失败: ' + e.message, 'error');
             }
         }
 
         async function refreshAll() {
+            if (!isWebAuthReady()) return;
             await Promise.all([
                 loadStatus(),
                 loadActive(),
@@ -2498,10 +2637,95 @@
             $('#connLabel').textContent = online ? '实时连接' : '离线';
         }
 
+        function renderWebAuthCard(status={}) {
+            const card = $('#webAuthCard');
+            if (!card) return;
+            const badge = $('#webAuthBadge');
+            const message = $('#webAuthMessage');
+
+            if (!state.webAuthRequired) {
+                card.style.display = 'none';
+                return;
+            }
+
+            const isReady = state.webAuthenticated;
+            badge.textContent = isReady ? '已验证' : '待验证';
+            message.textContent = status.message || (isReady
+                ? '当前浏览器已通过页面访问验证。'
+                : '当前部署开启了页面访问令牌，请先输入 TELEGRAM_DAEMON_WEB_TOKEN。');
+            card.style.display = isReady ? 'none' : '';
+
+            const input = $('#webAuthToken');
+            const token = getStoredWebToken();
+            if (input && token && !input.value) {
+                input.value = token;
+            }
+        }
+
+        async function loadWebAuthStatus() {
+            syncStoredWebTokenFromCookie();
+            const d = await apiFetch('/api/ui-auth-status');
+            state.webAuthRequired = !!d.auth_required;
+            state.webAuthenticated = !state.webAuthRequired || !!d.authenticated;
+            if (state.webAuthenticated) {
+                const token = getWebAuthToken();
+                if (token) setStoredWebToken(token);
+            } else if (getStoredWebToken()) {
+                clearStoredWebToken();
+            }
+            renderWebAuthCard(d);
+            return state.webAuthenticated;
+        }
+
+        async function submitWebAuth() {
+            const token = ($('#webAuthToken').value || '').trim();
+            if (!token) {
+                toast('请输入页面访问令牌', 'error');
+                return;
+            }
+            try {
+                await apiFetch('/api/ui-auth', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token })
+                });
+                setStoredWebToken(token);
+                await loadWebAuthStatus();
+                toast('页面访问验证通过', 'success');
+                await startRealtime();
+            } catch (e) {
+                toast('页面登录失败: ' + e.message, 'error');
+            }
+        }
+
+        async function clearWebAuthSession() {
+            try {
+                if (getWebAuthToken()) {
+                    await apiFetch('/api/ui-logout', { method: 'POST' });
+                }
+            } catch (_e) { /* ignore */ }
+            clearStoredWebToken();
+            document.cookie = `${WEB_AUTH_COOKIE_NAME}=; Max-Age=0; path=/`;
+            state.webAuthenticated = false;
+            renderWebAuthCard({ message: '本地页面凭证已清除，请重新输入 Web Token。' });
+            setConnection(false);
+        }
+
         let socket = null;
         function initSocket() {
+            if (!isWebAuthReady()) return;
             try {
-                socket = io({ transports: ['websocket', 'polling'], reconnection: true });
+                const token = getWebAuthToken();
+                if (socket) {
+                    socket.disconnect();
+                }
+                socket = io({
+                    path: appUrl('/socket.io'),
+                    transports: ['websocket', 'polling'],
+                    reconnection: true,
+                    auth: token ? { token } : undefined,
+                    query: token ? { tdd_token: token } : undefined
+                });
                 socket.on('connect', () => setConnection(true));
                 socket.on('disconnect', () => setConnection(false));
                 socket.on('connect_error', () => setConnection(false));
@@ -2537,7 +2761,7 @@
         function setAuthorized(authorized) {
             state.authorized = !!authorized;
             const card = $('#authCard');
-            if (state.authorized) {
+            if (state.authorized || !isWebAuthReady()) {
                 card.style.display = 'none';
             } else {
                 card.style.display = '';
@@ -2546,6 +2770,7 @@
         }
 
         async function loadAuthStatus() {
+            if (!isWebAuthReady()) return;
             try {
                 const d = await apiFetch('/api/auth/status');
                 $('#authBadge').textContent = d.authorized ? '已登录' : (d.awaiting_code ? '等待验证码' : '未登录');
@@ -2553,7 +2778,9 @@
                 $('#authCodeBlock').style.display = d.awaiting_code ? '' : 'none';
                 $('#authPwdBlock').style.display = d.requires_password ? '' : 'none';
                 if (d.phone && !$('#authPhone').value) $('#authPhone').value = d.phone;
-            } catch (e) { /* ignore */ }
+            } catch (e) {
+                if (e.status === 401) handleAuthFailure();
+            }
         }
 
         async function authSendCode() {
@@ -2708,7 +2935,7 @@
             window.addEventListener('resize', updatePagerProminence);
             updatePagerProminence();
 
-            document.addEventListener('click', (e) => {
+            document.addEventListener('click', async (e) => {
                 const t = e.target.closest('[data-action]');
                 if (t) {
                     const action = t.dataset.action;
@@ -2745,8 +2972,11 @@
                         const fname = t.dataset.name || '';
                         const histId = 'history-' + id;
                         const previewKind = t.dataset.previewKind || 'image';
-                        const previewUrl = `/api/media-preview?task_id=${encodeURIComponent(histId)}`;
-                        const downloadUrl = `/api/download?task_id=${encodeURIComponent(histId)}&filename=${encodeURIComponent(fname)}`;
+                        const previewUrl = buildUrl('/api/media-preview', { task_id: histId }, true);
+                        const downloadUrl = buildUrl('/api/download', {
+                            task_id: histId,
+                            filename: fname
+                        }, true);
                         openLightbox(previewKind, previewUrl, fname, downloadUrl);
                     }
                 }
@@ -2774,6 +3004,11 @@
 
             $('#renameSubmit').addEventListener('click', submitRename);
 
+            $('#webAuthLoginBtn').addEventListener('click', submitWebAuth);
+            $('#webAuthClearBtn').addEventListener('click', clearWebAuthSession);
+            $('#webAuthToken').addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') submitWebAuth();
+            });
             $('#authSendBtn').addEventListener('click', authSendCode);
             $('#authVerifyBtn').addEventListener('click', authVerifyCode);
             $('#authPwdBtn').addEventListener('click', authVerifyPassword);
@@ -2783,19 +3018,37 @@
             });
         }
 
-        function boot() {
-            bindEvents();
-            setAuthorized(authBootstrap.authorized);
-            refreshAll();
+        async function startRealtime() {
+            if (!isWebAuthReady()) return;
+            await refreshAll();
             initSocket();
-            setInterval(() => {
+            if (refreshTimer) clearInterval(refreshTimer);
+            refreshTimer = setInterval(() => {
+                if (!isWebAuthReady()) return;
                 if (!state.socketConnected) refreshAll();
                 else loadStatus();
             }, 10000);
         }
 
+        async function boot() {
+            bindEvents();
+            try {
+                await loadWebAuthStatus();
+            } catch (_e) {
+                state.webAuthRequired = false;
+                state.webAuthenticated = true;
+            }
+            setAuthorized(authBootstrap.authorized);
+            if (isWebAuthReady()) {
+                await startRealtime();
+            } else {
+                renderWebAuthCard();
+                setConnection(false);
+            }
+        }
+
         if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', boot);
+            document.addEventListener('DOMContentLoaded', () => { boot(); });
         } else {
             boot();
         }
