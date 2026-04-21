@@ -810,6 +810,80 @@
             color: var(--accent);
         }
 
+        .filename-privacy {
+            position: relative;
+            width: 100%;
+            min-width: 0;
+            border-radius: 10px;
+        }
+
+        .filename-privacy .row-name-content {
+            display: block;
+            position: relative;
+            z-index: 1;
+        }
+
+        .filename-privacy.is-masked .row-name-content {
+            filter: blur(8px);
+            opacity: 0.42;
+            pointer-events: none;
+            user-select: none;
+        }
+
+        .filename-privacy.is-masked .row-name-btn:hover {
+            color: var(--text-1);
+        }
+
+        .filename-privacy-mask {
+            position: absolute;
+            inset: -2px 0;
+            z-index: 2;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: none;
+            border-radius: 10px;
+            background:
+                linear-gradient(
+                    180deg,
+                    color-mix(in oklab, var(--bg-1) 74%, transparent),
+                    color-mix(in oklab, var(--bg-2) 82%, transparent)
+                );
+            backdrop-filter: blur(16px) saturate(120%);
+            -webkit-backdrop-filter: blur(16px) saturate(120%);
+            box-shadow:
+                inset 0 0 0 1px color-mix(in oklab, var(--text-1) 10%, transparent),
+                0 6px 16px rgba(0, 0, 0, 0.12);
+            color: var(--text-1);
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+        }
+
+        .filename-privacy-mask svg {
+            width: 18px;
+            height: 18px;
+            fill: currentColor;
+            opacity: 0.92;
+        }
+
+        .filename-privacy-mask:active {
+            transform: scale(0.98);
+        }
+
+        @media (hover: hover) {
+            .filename-privacy-mask:hover {
+                background:
+                    linear-gradient(
+                        180deg,
+                        color-mix(in oklab, var(--bg-1) 68%, transparent),
+                        color-mix(in oklab, var(--bg-2) 78%, transparent)
+                    );
+                box-shadow:
+                    inset 0 0 0 1px color-mix(in oklab, var(--accent) 24%, transparent),
+                    0 10px 22px rgba(0, 0, 0, 0.18);
+            }
+        }
+
         .row-meta {
             font-size: 12px;
             color: var(--text-3);
@@ -1883,6 +1957,7 @@
             tab: 'active',
             activeTasks: [],
             history: [],
+            revealedFilenameKeys: new Set(),
             page: 1,
             perPage: 10,
             pages: 1,
@@ -2128,6 +2203,52 @@
             return `<svg viewBox="0 0 24 24"><path d="${path}"/></svg>`;
         }
 
+        function eyeIcon() {
+            return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5c-5.23 0-9.27 3.11-11 7 1.73 3.89 5.77 7 11 7s9.27-3.11 11-7c-1.73-3.89-5.77-7-11-7Zm0 11a4 4 0 1 1 0-8 4 4 0 0 1 0 8Zm0-2.25A1.75 1.75 0 1 0 12 10a1.75 1.75 0 0 0 0 3.5Z"/></svg>';
+        }
+
+        function getTaskPrivacyKey(task) {
+            if (task && task.task_id) return `task:${task.task_id}`;
+            const fallback = [
+                task && task.status ? task.status : '',
+                task && task.filename ? task.filename : '',
+                task && (task.downloadTime || task.queued_at) ? (task.downloadTime || task.queued_at) : ''
+            ].join(':');
+            return `task:${fallback}`;
+        }
+
+        function getHistoryPrivacyKey(item) {
+            return `history:${item && item.id != null ? item.id : (item && item.filename ? item.filename : 'unknown')}`;
+        }
+
+        function isFilenameRevealed(key) {
+            return !!key && state.revealedFilenameKeys.has(String(key));
+        }
+
+        function renderPrivateFilename(titleHtml, privacyKey) {
+            const key = String(privacyKey || '');
+            const masked = key && !isFilenameRevealed(key);
+            const safeKey = escapeHtml(key);
+            return `
+                <div class="filename-privacy ${masked ? 'is-masked' : 'is-revealed'}" data-private-key="${safeKey}">
+                    ${titleHtml}
+                    ${masked ? `<button type="button" class="filename-privacy-mask" data-action="reveal-filename" data-private-key="${safeKey}" aria-label="显示文件名" title="显示文件名">${eyeIcon()}</button>` : ''}
+                </div>
+            `;
+        }
+
+        function revealFilename(button) {
+            const key = button && button.dataset ? button.dataset.privateKey : '';
+            if (!key) return;
+            state.revealedFilenameKeys.add(String(key));
+            const wrapper = button.closest('.filename-privacy');
+            if (wrapper) {
+                wrapper.classList.remove('is-masked');
+                wrapper.classList.add('is-revealed');
+            }
+            button.remove();
+        }
+
         function inferType(filename) {
             if (!filename) return 'Documents';
             const ext = (filename.split('.').pop() || '').toLowerCase();
@@ -2178,6 +2299,7 @@
             const badgeClass = task.status || 'queued';
             const iconType = task.file_type || inferType(task.filename);
             const name = escapeHtml(task.filename || 'unknown');
+            const privacyKey = getTaskPrivacyKey(task);
             const sizeStr = task.size ? formatBytes(task.size) : '';
             const speedStr = task.speed_bps ? formatSpeed(task.speed_bps) : '';
             const started = task.downloadTime ? escapeHtml(task.downloadTime) : '';
@@ -2212,7 +2334,7 @@
                 <li class="row" data-id="${escapeHtml(id)}">
                     <div class="row-thumb">${fileIcon(iconType)}</div>
                     <div class="row-main">
-                        <div class="row-name" title="${name}">${name}</div>
+                        ${renderPrivateFilename(`<div class="row-name row-name-content" title="${name}">${name}</div>`, privacyKey)}
                         <div class="row-meta">${metaHtml}</div>
                         ${progressHtml}
                     </div>
@@ -2228,6 +2350,7 @@
             const badgeClass = item.status || 'completed';
             const iconType = item.file_type || inferType(item.filename);
             const name = escapeHtml(item.filename || 'unknown');
+            const privacyKey = getHistoryPrivacyKey(item);
             const sizeStr = item.size ? formatBytes(item.size) : '';
             const link = item.source_message_link ? escapeHtml(item.source_message_link) : '';
             const started = item.start_time ? formatDate(item.start_time) : '';
@@ -2289,9 +2412,10 @@
                 thumb = fileIcon(iconType);
             }
 
-            const titleHtml = canPreview
-                ? `<button type="button" class="row-name row-name-btn"${previewAttrs} title="${name}">${name}</button>`
-                : `<div class="row-name" title="${name}">${name}</div>`;
+            const rawTitleHtml = canPreview
+                ? `<button type="button" class="row-name row-name-btn row-name-content"${previewAttrs} title="${name}">${name}</button>`
+                : `<div class="row-name row-name-content" title="${name}">${name}</div>`;
+            const titleHtml = renderPrivateFilename(rawTitleHtml, privacyKey);
 
             const checkbox = `<label class="row-select" style="display:inline-flex; align-items:center; padding:0 4px 0 8px"><input type="checkbox" data-batch data-id="${item.id}" data-name="${escapeHtml(item.filename)}" data-status="${escapeHtml(item.status||'')}"></label>`;
 
@@ -2940,7 +3064,12 @@
                 if (t) {
                     const action = t.dataset.action;
                     const id = t.dataset.id;
-                    if (action === 'cancel') cancelTask(id);
+                    if (action === 'reveal-filename') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        revealFilename(t);
+                    }
+                    else if (action === 'cancel') cancelTask(id);
                     else if (action === 'retry') retryTask(id);
                     else if (action === 'delete') deleteTask(id, t.dataset.name || '', t.dataset.status || '');
                     else if (action === 'rename') openRename(id, t.dataset.name || '');
