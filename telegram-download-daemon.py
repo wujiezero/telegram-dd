@@ -343,7 +343,7 @@ FILE_TYPE_RULES = {
     'IGNORE': ['part', 'desktop'],
     'Music': ['mp3', 'aac', 'flac', 'ogg', 'wma', 'm4a', 'aiff', 'wav', 'amr'],
     'Videos': ['flv', 'ogv', 'avi', 'mp4', 'mpg', 'mpeg', '3gp', 'mkv', 'ts', 'webm', 'vob', 'wmv', 'srt'],
-    'Pictures': ['png', 'jpeg', 'gif', 'jpg', 'bmp', 'svg', 'webp', 'psd', 'tiff'],
+    'Pictures': ['png', 'jpeg', 'jpg', 'gif', 'bmp', 'svg', 'webp', 'psd', 'tiff', 'heic', 'heif'],
     'Archives': ['rar', 'zip', '7z', 'gz', 'bz2', 'tar', 'tgz', 'xz', 'iso', 'cpio'],
     'Documents': ['txt', 'pdf', 'doc', 'docx', 'odf', 'xls', 'xlsv', 'xlsx', 'ppt', 'pptx', 'ppsx', 'odp', 'odt', 'ods', 'md', 'json', 'csv'],
     'Books': ['mobi', 'epub', 'chm'],
@@ -355,19 +355,38 @@ FILE_TYPE_RULES = {
     'Android': ['apk']
 }
 
+# Known compound extensions (longest first for priority matching)
+_COMPOUND_EXTENSIONS = {
+    'tar.gz', 'tar.bz2', 'tar.xz', 'tar.zst', 'tar.lz', 'tar.lzma',
+}
+_ARCHIVE_COMPOUND = {'gz', 'bz2', 'xz', 'zst', 'lz', 'lzma'}
+
 # Function to get file type category
 def getFileTypeCategory(filename):
-    ext = filename.split('.')[-1].lower() if '.' in filename else ''
-    
+    """Detect file category from extension, handling compound extensions like .tar.gz."""
+    parts = filename.lower().split('.') if '.' in filename else [filename.lower(), '']
+
+    # Try compound extension (last 2 parts) first
+    if len(parts) >= 3:
+        compound = f"{parts[-2]}.{parts[-1]}"
+        if compound in _COMPOUND_EXTENSIONS:
+            ext = compound
+        elif parts[-2] == 'tar' and parts[-1] in _ARCHIVE_COMPOUND:
+            ext = compound
+        else:
+            ext = parts[-1]
+    else:
+        ext = parts[-1] if len(parts) > 1 else ''
+
     # Check ignore list first
     if ext in FILE_TYPE_RULES['IGNORE']:
         return 'IGNORE'
-    
+
     # Check each category
     for category, extensions in FILE_TYPE_RULES.items():
         if category != 'IGNORE' and ext in extensions:
             return category
-    
+
     # Default to Other if no match
     return 'Other'
 
@@ -442,7 +461,18 @@ try:
         logger.info("Added target_dir column to downloads table")
     except sqlite3.OperationalError:
         pass
-    
+
+    for idx_sql, idx_desc in [
+        ("CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status)", "status"),
+        ("CREATE INDEX IF NOT EXISTS idx_downloads_file_type ON downloads(file_type)", "file_type"),
+        ("CREATE INDEX IF NOT EXISTS idx_downloads_start_time ON downloads(start_time)", "start_time"),
+        ("CREATE INDEX IF NOT EXISTS idx_downloads_filename ON downloads(filename)", "filename"),
+    ]:
+        try:
+            cursor.execute(idx_sql)
+        except Exception as idx_err:
+            logger.warning("Failed to create index on %s: %s", idx_desc, idx_err)
+
     conn.commit()
     logger.info("Downloads table created or already exists")
 except Exception as e:
@@ -618,12 +648,8 @@ def _get_cookie_token() -> str:
 
 
 def extract_request_token() -> str:
-    """Bearer 优先，其次 cookie，最后 query 参数（给 Socket.IO 降级握手用）。"""
-    return (
-        _get_bearer_token()
-        or _get_cookie_token()
-        or (request.args.get("tdd_token") or "")
-    )
+    """Bearer 优先，其次 cookie。"""
+    return _get_bearer_token() or _get_cookie_token()
 
 
 def is_request_authenticated() -> bool:
@@ -659,6 +685,26 @@ def _web_auth_gate():
             if not _constant_time_eq(csrf_value, WEB_AUTH_TOKEN):
                 return jsonify({"error": "CSRF check failed"}), 403
     return None
+
+
+@app.after_request
+def _web_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["X-XSS-Protection"] = "0"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob:; "
+        "media-src 'self'; "
+        "connect-src 'self' ws: wss:; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    )
+    return response
 
 
 @app.route("/healthz", methods=["GET"])
@@ -710,7 +756,8 @@ def _ui_logout():
 
 
 # Initialize SocketIO
-socketio = SocketIO(app, cors_allowed_origins="*")
+WEB_CORS_ORIGINS = (getenv("TELEGRAM_DAEMON_WEB_CORS_ORIGINS") or "").strip()
+socketio = SocketIO(app, cors_allowed_origins=WEB_CORS_ORIGINS.split(",") if WEB_CORS_ORIGINS else [])
 
 
 @socketio.on("connect")
@@ -861,6 +908,43 @@ def invalidate_total_tasks_count():
     """在新增 / 删除记录后调用，让下一次读取强制刷新。"""
     with _total_tasks_cache_lock:
         _total_tasks_cache['expires_at'] = 0.0
+    invalidate_history_count_cache()
+
+
+_history_count_cache_lock = threading.Lock()
+_history_count_cache = {}  # key: filter-hash -> {'value': int, 'expires_at': float}
+HISTORY_COUNT_CACHE_TTL = float(getenv("TELEGRAM_DAEMON_HISTORY_COUNT_CACHE_TTL", "10.0"))
+
+
+def get_cached_history_count(where_clause, params):
+    """缓存 api_history 的 COUNT 查询结果，key 是 filter 的哈希。"""
+    import hashlib
+    cache_key = hashlib.md5(
+        (where_clause + "|" + ",".join(str(p) for p in params)).encode("utf-8")
+    ).hexdigest()
+
+    now = time.time()
+    with _history_count_cache_lock:
+        entry = _history_count_cache.get(cache_key)
+        if entry and now < entry["expires_at"]:
+            return entry["value"]
+
+    local_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    local_cursor = local_conn.cursor()
+    count_query = f"SELECT COUNT(*) FROM downloads{where_clause}"
+    local_cursor.execute(count_query, params)
+    value = local_cursor.fetchone()[0]
+    local_cursor.close()
+    local_conn.close()
+
+    with _history_count_cache_lock:
+        _history_count_cache[cache_key] = {"value": value, "expires_at": now + HISTORY_COUNT_CACHE_TTL}
+    return value
+
+
+def invalidate_history_count_cache():
+    with _history_count_cache_lock:
+        _history_count_cache.clear()
 
 
 # Function to emit status update event
@@ -1156,10 +1240,8 @@ def api_history():
         if where_clause:
             where_clause = " WHERE " + where_clause[5:]
         
-        # Get total count with filters
-        count_query = f"SELECT COUNT(*) FROM downloads{where_clause}"
-        local_cursor.execute(count_query, params)
-        total = local_cursor.fetchone()[0]
+        # Get total count with filters (TTL-cached by filter hash)
+        total = get_cached_history_count(where_clause, tuple(params))
         
         allowed_sort_columns = {
             'time': 'start_time',
@@ -1602,7 +1684,11 @@ def api_media_preview():
             return jsonify({'error': 'Preview file not found'}), 404
 
         guessed_type, _ = guess_type(file_path)
-        if not guessed_type or (not guessed_type.startswith('image/') and not guessed_type.startswith('video/')):
+        if not guessed_type or (
+            not guessed_type.startswith('image/')
+            and not guessed_type.startswith('video/')
+            and not guessed_type.startswith('audio/')
+        ):
             return jsonify({'error': 'Unsupported preview media type'}), 415
 
         response = send_file(file_path, mimetype=guessed_type, as_attachment=False, conditional=True)
@@ -1618,7 +1704,7 @@ def run_web_server():
     logger.info("Starting web server on http://0.0.0.0:7373")
     while True:
         try:
-            socketio.run(app, host='0.0.0.0', port=7373, debug=False, use_reloader=False, allow_unsafe_werkzeug=True)
+            socketio.run(app, host='0.0.0.0', port=7373, debug=False, use_reloader=False)
             logger.info("Web server stopped")
             break
         except Exception as e:
