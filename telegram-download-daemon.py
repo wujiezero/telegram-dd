@@ -1704,7 +1704,7 @@ def run_web_server():
     logger.info("Starting web server on http://0.0.0.0:7373")
     while True:
         try:
-            socketio.run(app, host='0.0.0.0', port=7373, debug=False, use_reloader=False)
+            socketio.run(app, host='0.0.0.0', port=7373, debug=False, use_reloader=False, allow_unsafe_werkzeug=True)
             logger.info("Web server stopped")
             break
         except Exception as e:
