@@ -2570,7 +2570,9 @@
             }
 
             const previewKind = getPreviewKind(item, iconType);
-            const canPreview = item.status === 'completed' && !!previewKind;
+            // file_exists 由历史接口给出；磁盘文件已被清理时不再提供预览，避免点击触发 media-preview 404。
+            // 进行中的任务不带该字段（undefined），不受影响。
+            const canPreview = item.status === 'completed' && !!previewKind && item.file_exists !== false;
             const previewAttrs = canPreview
                 ? ` data-action="preview" data-preview-kind="${previewKind}" data-id="${item.id}" data-name="${escapeHtml(item.filename)}"`
                 : '';

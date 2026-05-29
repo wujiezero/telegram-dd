@@ -726,7 +726,7 @@ def _web_security_headers(response):
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: blob:; "
         "media-src 'self'; "
-        "connect-src 'self' ws: wss:; "
+        "connect-src 'self' ws: wss: https://cdnjs.cloudflare.com; "
         "frame-ancestors 'none'; "
         "base-uri 'self'; "
         "form-action 'self'"
@@ -1298,9 +1298,22 @@ def api_history():
         local_cursor.execute(select_query, query_params)
         rows = local_cursor.fetchall()
         
+        # 磁盘文件可能已被清理（如手动删除 /downloads），但 DB 记录仍在并引用旧路径。
+        # 这里按实际存在性修正返回值，避免前端继续请求已不存在的缩略图/预览而刷一堆 404。
+        def _path_exists_within(stored_path):
+            if not stored_path:
+                return False
+            try:
+                return os.path.exists(ensure_existing_path_within(downloadFolder, stored_path))
+            except Exception:
+                return False
+
         # Format response
         history = []
         for row in rows:
+            download_path = row[6]
+            thumbnail_path = row[7]
+            thumb_exists = _path_exists_within(thumbnail_path)
             history.append({
                 'id': row[0],
                 'filename': row[1],
@@ -1308,8 +1321,11 @@ def api_history():
                 'status': row[3],
                 'size': row[4],
                 'progress': row[5],
-                'download_path': row[6],
-                'thumbnail_path': row[7],
+                'download_path': download_path,
+                # 缩略图文件不在了就置空，前端据此不再发起 /api/thumbnail 请求
+                'thumbnail_path': thumbnail_path if thumb_exists else None,
+                # 主文件是否仍在磁盘上，供前端决定要不要显示预览/下载入口
+                'file_exists': _path_exists_within(download_path),
                 'retry_count': row[8],
                 'source_channel_id': row[9],
                 'source_message_id': row[10],
