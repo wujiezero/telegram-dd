@@ -39,6 +39,7 @@ from tdd_utils import (
     getRandomId,
     sanitize_filename,
 )
+from fast_download import download_file as fast_download_file, get_parallel_location
 
 from telethon import TelegramClient, events, __version__
 from telethon.tl.types import PeerChannel, DocumentAttributeFilename, DocumentAttributeVideo
@@ -132,6 +133,12 @@ TELEGRAM_DAEMON_NO_PROGRESS_TIMEOUT=int(getenv("TELEGRAM_DAEMON_NO_PROGRESS_TIME
 TELEGRAM_DAEMON_MAX_RETRIES=int(getenv("TELEGRAM_DAEMON_MAX_RETRIES", "3"))  # 最大重试次数，默认3次
 TELEGRAM_DAEMON_NOTIFY_FAILURE=bool(int(getenv("TELEGRAM_DAEMON_NOTIFY_FAILURE", "1")))  # 失败通知，默认开启
 TELEGRAM_DAEMON_QUEUE_WARN_SECONDS=int(getenv("TELEGRAM_DAEMON_QUEUE_WARN_SECONDS", "120"))
+# 单文件并行下载连接数：>1 时对足够大的文件启用多连接并行分块下载，
+# 以吃满（尤其是 Telegram Premium 放开的）高速下载限速档。设为 1 则保持默认串行下载。
+# 连接数过多可能触发 flood-wait，建议 2~8，默认 4。
+TELEGRAM_DAEMON_PARALLEL_CONNECTIONS=int(getenv("TELEGRAM_DAEMON_PARALLEL_CONNECTIONS", "4"))
+# 只有体积 >= 该阈值（MB）的文件才走并行下载；小文件并行收益低且更易触发限流。默认 10MB。
+TELEGRAM_DAEMON_PARALLEL_MIN_SIZE_MB=int(getenv("TELEGRAM_DAEMON_PARALLEL_MIN_SIZE_MB", "10"))
 
 parser = argparse.ArgumentParser(
     description="Script to download files from a Telegram Channel.")
@@ -236,6 +243,23 @@ parser.add_argument(
     help=
     'number of simultaneous downloads'
 )
+parser.add_argument(
+    "--parallel-connections",
+    type=int,
+    default=TELEGRAM_DAEMON_PARALLEL_CONNECTIONS,
+    help=
+    'connections per file for parallel chunked download (>1 enables FastTelethon-style '
+    'parallel download to saturate Premium high-speed quota; 1 keeps the default serial download). '
+    'Default is TELEGRAM_DAEMON_PARALLEL_CONNECTIONS env var.'
+)
+parser.add_argument(
+    "--parallel-min-size-mb",
+    type=int,
+    default=TELEGRAM_DAEMON_PARALLEL_MIN_SIZE_MB,
+    help=
+    'only files at least this many MB use parallel download (default is '
+    'TELEGRAM_DAEMON_PARALLEL_MIN_SIZE_MB env var).'
+)
 args = parser.parse_args()
 
 
@@ -269,6 +293,8 @@ downloadFolder = args.dest
 tempFolder = args.temp
 duplicates=args.duplicates
 worker_count = args.workers
+parallel_connections = max(1, int(args.parallel_connections))
+parallel_min_size_bytes = max(0, int(args.parallel_min_size_mb)) * 1024 * 1024
 updateFrequency = TELEGRAM_DAEMON_UPDATE_FREQUENCY
 download_timeout = TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT
 start_timeout = TELEGRAM_DAEMON_START_TIMEOUT
@@ -1712,10 +1738,42 @@ def run_web_server():
             logger.info("Restarting web server in 5 seconds...")
             time.sleep(5)
 
+async def log_premium_status(client: TelegramClient) -> None:
+    """启动时打印当前登录账号是否为 Telegram Premium，便于确认高速下载权益是否可用。"""
+    try:
+        me = await client.get_me()
+    except Exception as exc:
+        logger.warning("Could not determine account Premium status: %s", exc)
+        return
+
+    is_premium = bool(getattr(me, "premium", False))
+    username = getattr(me, "username", None) or getattr(me, "id", "unknown")
+    if is_premium:
+        logger.info(
+            "Logged-in account @%s is Telegram Premium — high-speed download quota available.",
+            username,
+        )
+    else:
+        logger.warning(
+            "Logged-in account @%s is NOT Telegram Premium; downloads are capped at the free quota "
+            "regardless of parallel connections.",
+            username,
+        )
+
+    if parallel_connections > 1:
+        logger.info(
+            "Parallel download enabled: %d connections per file for files >= %d MB.",
+            parallel_connections, parallel_min_size_bytes // (1024 * 1024),
+        )
+    else:
+        logger.info("Parallel download disabled (TELEGRAM_DAEMON_PARALLEL_CONNECTIONS=1); using serial download.")
+
+
 async def sendHelloMessage(client: TelegramClient, peerChannel: PeerChannel) -> None:
     entity = await client.get_entity(peerChannel)
     print(f"Telegram Download Daemon {TDD_VERSION} using Telethon {__version__}")
     print(f"  Simultaneous downloads: {worker_count}")
+    await log_premium_status(client)
     await client.send_message(entity, f"Telegram Download Daemon {TDD_VERSION} using Telethon {__version__}")
     await client.send_message(entity, "Hi! Ready for your files!")
 
@@ -1761,6 +1819,40 @@ async def log_reply(message: events.NewMessage.Event, reply: str) -> None:
     print(reply)
     if message is not None:
         await message.edit(reply)
+
+
+async def download_media_dispatch(message_obj, temp_path, progress_callback):
+    """根据配置选择并行分块下载或 Telethon 默认下载。
+
+    当 ``parallel_connections > 1`` 且文件是足够大的 Document 时，使用多连接并行
+    分块下载（吃满 Premium 高速档）；否则（或并行失败时）回退到默认串行下载，
+    行为与原先的 ``client.download_media`` 完全一致。
+    """
+    if parallel_connections > 1:
+        document = get_parallel_location(message_obj)
+        if document is not None and int(getattr(document, "size", 0)) >= parallel_min_size_bytes:
+            try:
+                with open(temp_path, "wb") as out:
+                    await fast_download_file(
+                        client,
+                        document,
+                        out,
+                        progress_callback=progress_callback,
+                        connection_count=parallel_connections,
+                    )
+                return temp_path
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "Parallel download failed (%s); falling back to serial download for %s",
+                    exc, temp_path,
+                )
+                with contextlib.suppress(Exception):
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+    return await client.download_media(
+        message_obj, temp_path, progress_callback=progress_callback)
 
 # NOTE: getRandomId / _WINDOWS_RESERVED_NAMES / sanitize_filename /
 # build_safe_path / ensure_existing_path_within 已迁移到 tdd_utils 模块，
@@ -2775,12 +2867,12 @@ try:
                     
                     download_task = None
                     try:
-                        # 创建下载任务
+                        # 创建下载任务（并行分块下载，自动回退到默认串行下载）
                         download_task = asyncio.create_task(
-                            client.download_media(
+                            download_media_dispatch(
                                 message_obj,
                                 build_safe_path(tempFolder, f"{filename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}"),
-                                progress_callback = check_start_callback
+                                check_start_callback,
                             )
                         )
                         # 注册到全局 active_download_tasks 供 /api/cancel 使用
