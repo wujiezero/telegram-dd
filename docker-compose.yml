@@ -13,9 +13,10 @@ services:
       # 某些 NAS/面板的 bind mount 目录可读但不可创建锁文件；遇到权限问题时可打开这一项。
       #- TELEGRAM_DAEMON_LOCK_FILE=/tmp/DownloadDaemon.lock
       - TELEGRAM_DAEMON_WORKERS=2
-      # 单文件多连接并行下载，用于吃满 Telegram Premium 放开的高速下载档。
-      # >1 启用并行（建议 2~8，过多易触发 flood-wait）；设为 1 保持默认串行下载。
-      - TELEGRAM_DAEMON_PARALLEL_CONNECTIONS=4
+      # 单文件多连接并行下载。实测在跨 DC（文件不在会话所在数据中心）场景下，导出授权 +
+      # 多连接拉同一文件会被 Telegram 重度限流，反而比原生下载慢很多，故默认关闭（=1，走原生下载）。
+      # 仅当确认能提速时再调到 2~8 试验（过多易触发 flood-wait）。
+      - TELEGRAM_DAEMON_PARALLEL_CONNECTIONS=1
       # 仅体积 >= 此值（MB）的文件走并行下载，小文件并行收益低。
       - TELEGRAM_DAEMON_PARALLEL_MIN_SIZE_MB=10
       - TELEGRAM_DAEMON_PROXY_RESOLVE_ONCE=1

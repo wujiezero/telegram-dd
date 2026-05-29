@@ -133,10 +133,11 @@ TELEGRAM_DAEMON_NO_PROGRESS_TIMEOUT=int(getenv("TELEGRAM_DAEMON_NO_PROGRESS_TIME
 TELEGRAM_DAEMON_MAX_RETRIES=int(getenv("TELEGRAM_DAEMON_MAX_RETRIES", "3"))  # 最大重试次数，默认3次
 TELEGRAM_DAEMON_NOTIFY_FAILURE=bool(int(getenv("TELEGRAM_DAEMON_NOTIFY_FAILURE", "1")))  # 失败通知，默认开启
 TELEGRAM_DAEMON_QUEUE_WARN_SECONDS=int(getenv("TELEGRAM_DAEMON_QUEUE_WARN_SECONDS", "120"))
-# 单文件并行下载连接数：>1 时对足够大的文件启用多连接并行分块下载，
-# 以吃满（尤其是 Telegram Premium 放开的）高速下载限速档。设为 1 则保持默认串行下载。
-# 连接数过多可能触发 flood-wait，建议 2~8，默认 4。
-TELEGRAM_DAEMON_PARALLEL_CONNECTIONS=int(getenv("TELEGRAM_DAEMON_PARALLEL_CONNECTIONS", "4"))
+# 单文件并行下载连接数：>1 时对足够大的文件启用多连接并行分块下载。
+# 注意：当文件不在会话所在 DC（跨 DC）时，导出授权 + 多连接拉同一文件会被 Telegram
+# 重度限流，实测反而比原生串行下载慢得多，故默认设为 1（走 Telethon 原生下载，最稳最快）。
+# 仅在确认能提速的环境下再调到 2~8 试验（连接数过多易触发 flood-wait）。
+TELEGRAM_DAEMON_PARALLEL_CONNECTIONS=int(getenv("TELEGRAM_DAEMON_PARALLEL_CONNECTIONS", "1"))
 # 只有体积 >= 该阈值（MB）的文件才走并行下载；小文件并行收益低且更易触发限流。默认 10MB。
 TELEGRAM_DAEMON_PARALLEL_MIN_SIZE_MB=int(getenv("TELEGRAM_DAEMON_PARALLEL_MIN_SIZE_MB", "10"))
 

@@ -3049,7 +3049,12 @@
                 }
                 socket = io({
                     path: appUrl('/socket.io'),
-                    transports: ['websocket', 'polling'],
+                    // 后端跑在 Flask-SocketIO 的 threading 模式 + Werkzeug 开发服务器上，
+                    // WebSocket 升级在该组合下握手不稳（werkzeug 偶发 "write() before start_response" 500，
+                    // 浏览器侧表现为 WebSocket connection failed）。这里只用 long-polling，
+                    // 推送进度同样实时且稳定，并彻底消除控制台的 websocket 报错。
+                    transports: ['polling'],
+                    upgrade: false,
                     reconnection: true,
                     auth: token ? { token } : undefined,
                 });
