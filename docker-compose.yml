@@ -5,9 +5,9 @@ services:
       dockerfile: Dockerfile
     container_name: telegram-download
     environment:
-      - TELEGRAM_DAEMON_API_ID=
-      - TELEGRAM_DAEMON_API_HASH=
-      - TELEGRAM_DAEMON_CHANNEL=
+      - TELEGRAM_DAEMON_API_ID=${TELEGRAM_DAEMON_API_ID}
+      - TELEGRAM_DAEMON_API_HASH=${TELEGRAM_DAEMON_API_HASH}
+      - TELEGRAM_DAEMON_CHANNEL=${TELEGRAM_DAEMON_CHANNEL}
       - TELEGRAM_DAEMON_DEST=/downloads
       - TELEGRAM_DAEMON_SESSION_PATH=/session
       # 某些 NAS/面板的 bind mount 目录可读但不可创建锁文件；遇到权限问题时可打开这一项。
@@ -20,7 +20,7 @@ services:
       - TELEGRAM_DAEMON_PARALLEL_MIN_SIZE_MB=10
       - TELEGRAM_DAEMON_PROXY_RESOLVE_ONCE=1
       # 开启 Web UI 鉴权；留空则为开放访问（老行为）
-      - TELEGRAM_DAEMON_WEB_TOKEN=
+      - TELEGRAM_DAEMON_WEB_TOKEN=${TELEGRAM_DAEMON_WEB_TOKEN:-}
       # 如果通过 HTTPS 反代再暴露，可以把 cookie 的 Secure 打开
       - TELEGRAM_DAEMON_WEB_COOKIE_SECURE=0
       # Proxy configuration (uncomment and modify if needed)
