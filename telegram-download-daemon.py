@@ -2767,7 +2767,11 @@ try:
                     # 为了避免每个 tick 都写 SQLite + 广播 WS，我们按 **进度变化 >= 1% 或距上次
                     # 更新 >= 2s** 的节流策略做事。仅当真正推进时才触发 DB 写、WS 广播、Telegram 回复。
                     last_progress_time = [time.time()]
-                    last_speed_snapshot = [{'received': 0, 'timestamp': time.time()}]
+                    # 速度按“固定时间窗口”统计，而不是相邻两次回调之差：并行分块下载时回调会
+                    # 在一个网络往返内突发触发多次（间隔≈0），用瞬时差会把速度放大几十上百倍。
+                    # 只有距上次采样 >= SPEED_SAMPLE_INTERVAL 才重算速度，否则沿用上次结果。
+                    last_speed_snapshot = [{'received': 0, 'timestamp': time.time(), 'speed_bps': 0.0}]
+                    SPEED_SAMPLE_INTERVAL = 0.5  # seconds
                     # 节流快照：[上次写库/广播的 percentage, 上次写库/广播的时间戳]
                     last_persisted = [-1.0, 0.0]
                     PROGRESS_MIN_DELTA = 1.0   # %
@@ -2781,15 +2785,19 @@ try:
                         progress_message = "{0} % ({1} / {2})".format(percentage, received, total)
                         last_progress_time[0] = time.time()
 
-                        previous_received = last_speed_snapshot[0]['received']
-                        previous_timestamp = last_speed_snapshot[0]['timestamp']
-                        elapsed_seconds = max(last_progress_time[0] - previous_timestamp, 0.001)
-                        bytes_delta = max(received - previous_received, 0)
-                        speed_bps = bytes_delta / elapsed_seconds
-                        last_speed_snapshot[0] = {
-                            'received': received,
-                            'timestamp': last_progress_time[0],
-                        }
+                        snapshot = last_speed_snapshot[0]
+                        elapsed_seconds = last_progress_time[0] - snapshot['timestamp']
+                        if elapsed_seconds >= SPEED_SAMPLE_INTERVAL:
+                            bytes_delta = max(received - snapshot['received'], 0)
+                            speed_bps = bytes_delta / elapsed_seconds
+                            last_speed_snapshot[0] = {
+                                'received': received,
+                                'timestamp': last_progress_time[0],
+                                'speed_bps': speed_bps,
+                            }
+                        else:
+                            # 时间窗口未到，沿用上次的稳定速度，避免突发回调把瞬时速度算爆。
+                            speed_bps = snapshot['speed_bps']
 
                         # in-memory 状态每次都更新——便宜、无锁竞争，/api/tasks 能读到最新速度
                         with sync_lock:
