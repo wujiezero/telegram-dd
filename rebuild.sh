@@ -1,16 +1,5 @@
 #!/usr/bin/env bash
+# 兼容旧入口：实际逻辑已统一到 tdd.sh，这里转发到 `tdd.sh rebuild`。
 set -euo pipefail
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
-
-echo "[1/3] Stopping and removing existing containers..."
-docker compose down --remove-orphans --rmi local
-
-echo "[2/3] Rebuilding image from current directory..."
-docker compose build --no-cache
-
-echo "[3/3] Starting services..."
-docker compose up -d
-
-echo "Done."
+exec "${SCRIPT_DIR}/tdd.sh" rebuild

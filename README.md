@@ -98,6 +98,20 @@ Android: apk
 
 # Docker
 
+## 配置环境变量
+
+使用 docker-compose 前，先把示例配置复制为 `.env` 并填入你的密钥（`docker compose` 会自动读取同目录下的 `.env`）：
+
+```bash
+cp .env.example .env
+# 编辑 .env，至少填写 TELEGRAM_DAEMON_API_ID / API_HASH / CHANNEL
+# 强烈建议同时设置 TELEGRAM_DAEMON_WEB_TOKEN 开启 Web 鉴权
+```
+
+`.env` 已在 `.gitignore` 中忽略，不会被提交，请放心填写真实密钥。各配置项的含义见 `.env.example` 内的注释，或上文「使用」表格。
+
+## 构建与运行
+
 推荐自行编译镜像，而不是使用预编译的镜像。
 只需要注释掉 `docker-compose.yml` 中的 `image` 语句，放开 `build` 的注释，并执行 `docker-compose build --no-cache`。
 
@@ -118,3 +132,45 @@ $ docker-compose up -d
 ```
 
 查看 [docker-compose.yml](docker-compose.yml) 文件中的 `sessions` 卷配置。
+
+# 管理脚本
+
+仓库提供统一的管理脚本 `tdd.sh`，封装了常用的启停与运维操作（基于 `docker compose`，自动兼容旧版 `docker-compose`）：
+
+```bash
+./tdd.sh start            # 启动服务（后台）
+./tdd.sh stop             # 停止并移除容器
+./tdd.sh restart          # 重启服务
+./tdd.sh status           # 查看容器状态并探测健康检查
+./tdd.sh logs [-f]        # 查看日志（-f 持续跟随）
+./tdd.sh rebuild          # 无缓存重建镜像并重启
+./tdd.sh shell            # 进入容器交互式 shell
+./tdd.sh login            # 首次交互式登录（输入手机号 + 验证码）
+./tdd.sh test             # 在本地虚拟环境运行单元测试
+./tdd.sh health           # 仅探测 /healthz 健康检查端点
+```
+
+首次部署的推荐流程：
+
+```bash
+./tdd.sh login    # 按提示完成 Telegram 登录，看到 "Signed in successfully" 后 Ctrl+C 退出
+./tdd.sh start    # 后台启动
+./tdd.sh status   # 确认运行正常
+```
+
+> 旧的 `rebuild.sh` 仍可使用，它现在会转发到 `./tdd.sh rebuild`。
+
+# 单元测试
+
+纯逻辑（文件名清洗、路径安全、文件类型归类、分页参数归一化、session 锁路径等）已抽离到 `tdd_utils.py` / `sessionManager.py`，便于在不启动 Telegram 客户端的情况下测试。
+
+```bash
+# 方式一：通过管理脚本
+./tdd.sh test
+
+# 方式二：直接用 pytest
+python -m pytest tests/ -v
+
+# 方式三：仅用标准库 unittest（无需安装 pytest）
+python -m unittest discover -s tests -v
+```

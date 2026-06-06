@@ -35,8 +35,11 @@ from sessionManager import (
 from tdd_utils import (
     WINDOWS_RESERVED_NAMES as _WINDOWS_RESERVED_NAMES,
     build_safe_path,
+    compute_total_pages,
     ensure_existing_path_within,
+    getFileTypeCategory,
     getRandomId,
+    normalize_pagination,
     sanitize_filename,
 )
 from fast_download import download_file as fast_download_file, get_parallel_location
@@ -365,57 +368,7 @@ if args.proxy_host and args.proxy_port:
         )
         print(f"Using proxy without auth: {proxy_type_str}://{args.proxy_host}:{args.proxy_port}")
 
-# File Type Categorization Rules
-FILE_TYPE_RULES = {
-    'IGNORE': ['part', 'desktop'],
-    'Music': ['mp3', 'aac', 'flac', 'ogg', 'wma', 'm4a', 'aiff', 'wav', 'amr'],
-    'Videos': ['flv', 'ogv', 'avi', 'mp4', 'mpg', 'mpeg', '3gp', 'mkv', 'ts', 'webm', 'vob', 'wmv', 'srt'],
-    'Pictures': ['png', 'jpeg', 'jpg', 'gif', 'bmp', 'svg', 'webp', 'psd', 'tiff', 'heic', 'heif'],
-    'Archives': ['rar', 'zip', '7z', 'gz', 'bz2', 'tar', 'tgz', 'xz', 'iso', 'cpio'],
-    'Documents': ['txt', 'pdf', 'doc', 'docx', 'odf', 'xls', 'xlsv', 'xlsx', 'ppt', 'pptx', 'ppsx', 'odp', 'odt', 'ods', 'md', 'json', 'csv'],
-    'Books': ['mobi', 'epub', 'chm'],
-    'DEBPackages': ['deb'],
-    'Programs': ['exe', 'msi'],
-    'RPMPackages': ['rpm'],
-    'Mac': ['dmg', 'pkg'],
-    'Linux': ['sh', 'rpm', 'deb'],
-    'Android': ['apk']
-}
-
-# Known compound extensions (longest first for priority matching)
-_COMPOUND_EXTENSIONS = {
-    'tar.gz', 'tar.bz2', 'tar.xz', 'tar.zst', 'tar.lz', 'tar.lzma',
-}
-_ARCHIVE_COMPOUND = {'gz', 'bz2', 'xz', 'zst', 'lz', 'lzma'}
-
-# Function to get file type category
-def getFileTypeCategory(filename):
-    """Detect file category from extension, handling compound extensions like .tar.gz."""
-    parts = filename.lower().split('.') if '.' in filename else [filename.lower(), '']
-
-    # Try compound extension (last 2 parts) first
-    if len(parts) >= 3:
-        compound = f"{parts[-2]}.{parts[-1]}"
-        if compound in _COMPOUND_EXTENSIONS:
-            ext = compound
-        elif parts[-2] == 'tar' and parts[-1] in _ARCHIVE_COMPOUND:
-            ext = compound
-        else:
-            ext = parts[-1]
-    else:
-        ext = parts[-1] if len(parts) > 1 else ''
-
-    # Check ignore list first
-    if ext in FILE_TYPE_RULES['IGNORE']:
-        return 'IGNORE'
-
-    # Check each category
-    for category, extensions in FILE_TYPE_RULES.items():
-        if category != 'IGNORE' and ext in extensions:
-            return category
-
-    # Default to Other if no match
-    return 'Other'
+# 文件类型归类规则 (FILE_TYPE_RULES) 与 getFileTypeCategory() 已抽到 tdd_utils，便于单元测试。
 
 # Database Configuration
 # Use /app/db directory for database file in container, or current directory in development
@@ -1229,20 +1182,22 @@ def api_tasks():
 @app.route('/api/history')
 def api_history():
     try:
-        # Get pagination parameters
-        page = request.args.get('page', 1, type=int)
-        per_page = request.args.get('per_page', 10, type=int)
-        
+        # Get pagination parameters（带边界校验：防止 per_page=0 触发除零、
+        # per_page<0 让 SQLite 返回全表，以及超大 per_page 拖垮查询）
+        page, per_page, offset = normalize_pagination(
+            request.args.get('page'),
+            request.args.get('per_page'),
+            default_per_page=10,
+            max_per_page=200,
+        )
+
         # Get filter parameters
         filename = request.args.get('filename', None)
         file_type = request.args.get('file_type', None)
         status = request.args.get('status', None)
         sort_by = request.args.get('sort_by', 'start_time', type=str)
         sort_dir = request.args.get('sort_dir', 'desc', type=str)
-        
-        # Calculate offset
-        offset = (page - 1) * per_page
-        
+
         # Create a new connection for this request to ensure thread safety
         local_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         local_cursor = local_conn.cursor()
@@ -1345,7 +1300,7 @@ def api_history():
             'total': total,
             'page': page,
             'per_page': per_page,
-            'pages': math.ceil(total / per_page),
+            'pages': compute_total_pages(total, per_page),
             'sort_by': sort_column,
             'sort_dir': sort_direction.lower()
         })

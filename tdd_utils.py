@@ -6,9 +6,108 @@ asyncio loop 的代码请保留在 telegram-download-daemon.py 中。
 
 from __future__ import annotations
 
+import math
 import os
 import random
 import string
+
+
+# ---------------------------------------------------------------------------
+# 文件类型归类规则
+# ---------------------------------------------------------------------------
+# 下载完成后按扩展名把文件归类到不同子目录。规则以小写扩展名匹配。
+FILE_TYPE_RULES = {
+    'IGNORE': ['part', 'desktop'],
+    'Music': ['mp3', 'aac', 'flac', 'ogg', 'wma', 'm4a', 'aiff', 'wav', 'amr'],
+    'Videos': ['flv', 'ogv', 'avi', 'mp4', 'mpg', 'mpeg', '3gp', 'mkv', 'ts', 'webm', 'vob', 'wmv', 'srt'],
+    'Pictures': ['png', 'jpeg', 'jpg', 'gif', 'bmp', 'svg', 'webp', 'psd', 'tiff', 'heic', 'heif'],
+    'Archives': ['rar', 'zip', '7z', 'gz', 'bz2', 'tar', 'tgz', 'xz', 'iso', 'cpio',
+                 'zst', 'lz', 'lzma',
+                 'tar.gz', 'tar.bz2', 'tar.xz', 'tar.zst', 'tar.lz', 'tar.lzma'],
+    'Documents': ['txt', 'pdf', 'doc', 'docx', 'odf', 'xls', 'xlsv', 'xlsx', 'ppt', 'pptx', 'ppsx', 'odp', 'odt', 'ods', 'md', 'json', 'csv'],
+    'Books': ['mobi', 'epub', 'chm'],
+    'DEBPackages': ['deb'],
+    'Programs': ['exe', 'msi'],
+    'RPMPackages': ['rpm'],
+    'Mac': ['dmg', 'pkg'],
+    'Linux': ['sh', 'rpm', 'deb'],
+    'Android': ['apk'],
+}
+
+# 已知的复合扩展名（按长度优先匹配），用于正确识别 .tar.gz 这类形式
+_COMPOUND_EXTENSIONS = {
+    'tar.gz', 'tar.bz2', 'tar.xz', 'tar.zst', 'tar.lz', 'tar.lzma',
+}
+_ARCHIVE_COMPOUND = {'gz', 'bz2', 'xz', 'zst', 'lz', 'lzma'}
+
+
+def getFileTypeCategory(filename: str) -> str:
+    """根据扩展名判断文件类别，能正确处理 .tar.gz 这类复合扩展名。
+
+    匹配不到任何已知类别时返回 ``'Other'``；命中忽略列表返回 ``'IGNORE'``。
+    """
+    name = (filename or "").lower()
+    parts = name.split('.') if '.' in name else [name, '']
+
+    # 先尝试复合扩展名（最后两段）
+    if len(parts) >= 3:
+        compound = f"{parts[-2]}.{parts[-1]}"
+        if compound in _COMPOUND_EXTENSIONS:
+            ext = compound
+        elif parts[-2] == 'tar' and parts[-1] in _ARCHIVE_COMPOUND:
+            ext = compound
+        else:
+            ext = parts[-1]
+    else:
+        ext = parts[-1] if len(parts) > 1 else ''
+
+    # 先查忽略列表
+    if ext in FILE_TYPE_RULES['IGNORE']:
+        return 'IGNORE'
+
+    # 再逐类别匹配
+    for category, extensions in FILE_TYPE_RULES.items():
+        if category != 'IGNORE' and ext in extensions:
+            return category
+
+    return 'Other'
+
+
+def normalize_pagination(page, per_page, default_per_page: int = 10,
+                         max_per_page: int = 100):
+    """把外部传入的分页参数归一化为安全可用的 ``(page, per_page, offset)``。
+
+    防御点：
+    - ``page`` 至少为 1，非法/缺失回退到 1；
+    - ``per_page`` 落在 ``[1, max_per_page]`` 区间，避免 ``0``（除零错误）
+      或负数（SQLite 下 ``LIMIT -1`` 会返回全表）造成的崩溃 / DoS；
+    - 非整数（含 ``None`` / 字符串）回退到默认值。
+    """
+    def _to_int(value, fallback):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return fallback
+
+    page = _to_int(page, 1)
+    per_page = _to_int(per_page, default_per_page)
+
+    if page < 1:
+        page = 1
+    if per_page < 1:
+        per_page = default_per_page
+    if per_page > max_per_page:
+        per_page = max_per_page
+
+    offset = (page - 1) * per_page
+    return page, per_page, offset
+
+
+def compute_total_pages(total: int, per_page: int) -> int:
+    """根据总条数与每页大小计算总页数，安全处理 ``per_page <= 0`` 的边界。"""
+    if per_page <= 0:
+        return 0
+    return math.ceil(max(total, 0) / per_page)
 
 
 # Windows 保留名（不含大小写），禁止直接作为文件名
