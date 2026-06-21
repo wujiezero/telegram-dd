@@ -168,35 +168,40 @@ if not tempFolder:
     tempFolder = downloadFolder
    
 # Proxy configuration
+# Only build a proxy when both host and port are provided. The proxy type is
+# honoured (socks5/socks4/http) instead of being hard-coded to SOCKS5.
 connection = None
 proxy = None
 if args.proxy_host and args.proxy_port:
-    # 使用字符串格式的代理类型，确保兼容性
-    proxy_type_str = args.proxy_type.lower()
-    
-    # 确保代理类型是Telethon支持的格式
-    if proxy_type_str not in ['socks5', 'http', 'mtproxy']:
-        proxy_type_str = 'socks5'  # 默认使用SOCKS5
-    
-# 建议修改后的代码片段
-if args.proxy_username and args.proxy_password:
-    proxy = (
-        socks.SOCKS5,
-        args.proxy_host,
-        int(args.proxy_port),
-        False,
-        args.proxy_username,
-        args.proxy_password
-    )
-    print(f"Using proxy: socks5://{args.proxy_username}:******@{args.proxy_host}:{args.proxy_port}")
-else:
-    proxy = (
-        socks.SOCKS5,
-        args.proxy_host,
-        int(args.proxy_port),
-        False
-    )
-    print(f"Using proxy without auth: socks5://{args.proxy_host}:{args.proxy_port}")
+    proxy_type_str = (args.proxy_type or "socks5").lower()
+
+    # Map the textual proxy type to the constant PySocks/Telethon expects.
+    proxy_type_map = {
+        'socks5': socks.SOCKS5,
+        'socks4': socks.SOCKS4,
+        'http': socks.HTTP,
+    }
+    if proxy_type_str not in proxy_type_map:
+        proxy_type_str = 'socks5'  # Default to SOCKS5 for unknown types
+    proxy_protocol = proxy_type_map[proxy_type_str]
+
+    if args.proxy_username and args.proxy_password:
+        proxy = (
+            proxy_protocol,
+            args.proxy_host,
+            int(args.proxy_port),
+            True,
+            args.proxy_username,
+            args.proxy_password
+        )
+        print(f"Using proxy: {proxy_type_str}://{args.proxy_username}:******@{args.proxy_host}:{args.proxy_port}")
+    else:
+        proxy = (
+            proxy_protocol,
+            args.proxy_host,
+            int(args.proxy_port)
+        )
+        print(f"Using proxy without auth: {proxy_type_str}://{args.proxy_host}:{args.proxy_port}")
 
 # File Type Categorization Rules
 FILE_TYPE_RULES = {
@@ -236,6 +241,11 @@ def getFileTypeCategory(filename):
 DB_DIR = '/app/db' if os.path.exists('/app/db') else os.path.dirname(__file__)
 DB_PATH = os.path.join(DB_DIR, 'downloads.db')
 logger.info(f"Database path: {DB_PATH}")
+
+# Serialise writes on the shared connection. The worker coroutines and the
+# (synchronous) download progress callbacks all share the global connection,
+# so concurrent commits are guarded by this lock to avoid corruption.
+db_write_lock = threading.Lock()
 
 # Initialize database
 try:
@@ -315,9 +325,11 @@ def index():
     proxy_info = None
     if proxy:
         if isinstance(proxy, tuple):
+            # Map the numeric socks constant back to a readable label
+            proxy_type_names = {socks.SOCKS5: 'socks5', socks.SOCKS4: 'socks4', socks.HTTP: 'http'}
             # Handle tuple format proxy
             proxy_info = {
-                'type': proxy[0] if len(proxy) > 0 else 'socks5',
+                'type': proxy_type_names.get(proxy[0], str(proxy[0])) if len(proxy) > 0 else 'socks5',
                 'host': proxy[1] if len(proxy) > 1 else '',
                 'port': proxy[2] if len(proxy) > 2 else '',
                 'username': proxy[4] if len(proxy) > 4 else ''
@@ -618,45 +630,54 @@ def api_rename():
         
         if not task_id or not filename or not new_filename:
             return jsonify({'error': 'Missing task_id, filename, or new_filename parameter'}), 400
-        
+
+        # Sanitise the new filename to prevent path traversal: strip any directory
+        # components and reject names that escape the target directory.
+        new_filename = os.path.basename(new_filename.strip())
+        if not new_filename or new_filename in ('.', '..'):
+            return jsonify({'error': 'Invalid new filename'}), 400
+
         # Extract actual task id from task_id string (e.g., "history-123" -> "123")
         actual_task_id = task_id.split('-')[-1]
-        
+
         # Create a new connection for this request to ensure thread safety
         local_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         local_cursor = local_conn.cursor()
-        
+
         # Get file path from database
         local_cursor.execute('SELECT download_path, file_type FROM downloads WHERE id = ?', (actual_task_id,))
         result = local_cursor.fetchone()
-        
+
         if not result:
             local_cursor.close()
             local_conn.close()
             return jsonify({'error': 'File not found in database'}), 404
-        
+
         old_file_path = result[0]
         file_type = result[1]
-        
+
         # Check if file exists
         if not os.path.exists(old_file_path):
             local_cursor.close()
             local_conn.close()
             return jsonify({'error': 'File not found on disk'}), 404
-        
-        # Get directory path and extension
+
+        # Get directory path and build the new path inside the same directory
         dir_path = os.path.dirname(old_file_path)
-        old_extension = os.path.splitext(old_file_path)[1]
-        
-        # Create new file path with same extension
         new_file_path = os.path.join(dir_path, new_filename)
-        
-        # Rename file on disk
-        os.rename(old_file_path, new_file_path)
+
+        # Final guard: ensure the resolved destination stays within dir_path
+        if os.path.dirname(os.path.realpath(new_file_path)) != os.path.realpath(dir_path):
+            local_cursor.close()
+            local_conn.close()
+            return jsonify({'error': 'Invalid new filename'}), 400
+
+        # Move file on disk (shutil.move handles cross-filesystem renames)
+        move(old_file_path, new_file_path)
         logger.info(f'Renamed file: {old_file_path} -> {new_file_path}')
         
-        # Update filename in database
-        local_cursor.execute('UPDATE downloads SET filename = ? WHERE id = ?', (new_filename, actual_task_id))
+        # Update filename and stored path in database
+        local_cursor.execute('UPDATE downloads SET filename = ?, download_path = ? WHERE id = ?', (new_filename, new_file_path, actual_task_id))
         local_conn.commit()
         logger.info(f'Updated download record filename: {actual_task_id} -> {new_filename}')
         
@@ -974,12 +995,13 @@ try:
 
                     # Insert download record into database
                     download_path = os.path.join(category_folder, filename)
-                    cursor.execute('''
-                    INSERT INTO downloads (filename, file_type, status, size, progress, download_path)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ''', (filename, file_category, 'downloading', size, 0.0, download_path))
-                    conn.commit()
-                    download_id = cursor.lastrowid
+                    with db_write_lock:
+                        cursor.execute('''
+                        INSERT INTO downloads (filename, file_type, status, size, progress, download_path)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ''', (filename, file_category, 'downloading', size, 0.0, download_path))
+                        conn.commit()
+                        download_id = cursor.lastrowid
                     logger.info(f"Inserted download record: ID={download_id}, Status=downloading")
 
                     await log_reply(
@@ -1005,10 +1027,11 @@ try:
                                 lastUpdate = currentTime
                         
                         # Update progress in database
-                        cursor.execute('''
-                        UPDATE downloads SET progress = ? WHERE id = ?
-                        ''', (percentage, download_id))
-                        conn.commit()
+                        with db_write_lock:
+                            cursor.execute('''
+                            UPDATE downloads SET progress = ? WHERE id = ?
+                            ''', (percentage, download_id))
+                            conn.commit()
                         if percentage % 10 == 0:  # Log every 10% progress
                             logger.info(f"Download progress: {filename} - {percentage}% ({received}/{total} bytes)")
                         
@@ -1032,10 +1055,11 @@ try:
                     logger.info(f"Download completed: {filename} saved to {download_path}")
 
                     # Update download record as completed
-                    cursor.execute('''
-                    UPDATE downloads SET status = ?, progress = 100.0, end_time = CURRENT_TIMESTAMP WHERE id = ?
-                    ''', ('completed', download_id))
-                    conn.commit()
+                    with db_write_lock:
+                        cursor.execute('''
+                        UPDATE downloads SET status = ?, progress = 100.0, end_time = CURRENT_TIMESTAMP WHERE id = ?
+                        ''', ('completed', download_id))
+                        conn.commit()
                     logger.info(f"Updated download record: ID={download_id}, Status=completed")
 
                     # Update status after download completes
@@ -1050,10 +1074,11 @@ try:
                         
                         # Update download record as failed
                         if download_id:
-                            cursor.execute('''
-                            UPDATE downloads SET status = ?, error_message = ?, end_time = CURRENT_TIMESTAMP WHERE id = ?
-                            ''', ('failed', error_msg, download_id))
-                            conn.commit()
+                            with db_write_lock:
+                                cursor.execute('''
+                                UPDATE downloads SET status = ?, error_message = ?, end_time = CURRENT_TIMESTAMP WHERE id = ?
+                                ''', ('failed', error_msg, download_id))
+                                conn.commit()
                             logger.info(f"Updated download record: ID={download_id}, Status=failed")
                     except Exception as reply_error:
                         logger.error(f'Error sending reply: {reply_error}')
