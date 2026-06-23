@@ -6,3 +6,9 @@
 downloads.db
 __pycache__
 .pytest_cache
+# 运行时产物（docker-compose / 本地直跑都会生成）
+downloads/
+sessions/
+db/
+logs/
+*.session-journal
