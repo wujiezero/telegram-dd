@@ -1,5 +1,10 @@
 # Use official Python image with pip mirror for mainland China
-FROM python:3.12 AS compile-image
+#
+# 编译层刻意和运行层用**同一个** slim 镜像：requirements.txt 里需要编译的三个依赖
+# （cffi / cryptg / Pillow）在 x86_64 与 aarch64 上都有现成的 manylinux 轮子，
+# 用不到完整镜像里的 gcc。少拉一个 ~1GB 的基础镜像，构建更快，也少一次
+# Docker Hub 往返（国内网络下 `load metadata for python:3.12` 经常读到一半断流）。
+FROM python:3.12-slim AS compile-image
 
 # Copy requirements.txt first for better caching
 COPY requirements.txt ./
