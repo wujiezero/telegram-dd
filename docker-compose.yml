@@ -19,6 +19,13 @@ services:
       - TELEGRAM_DAEMON_PARALLEL_CONNECTIONS=1
       # 仅体积 >= 此值（MB）的文件走并行下载，小文件并行收益低。
       - TELEGRAM_DAEMON_PARALLEL_MIN_SIZE_MB=10
+      # 监听频道里出现的 t.me 消息链接（含私密频道 t.me/c/<id>/<msg>），自动抓取并下载。
+      # 前提是登录账号本身在那个私密频道里。
+      - TELEGRAM_DAEMON_LINK_DOWNLOAD=${TELEGRAM_DAEMON_LINK_DOWNLOAD:-1}
+      - TELEGRAM_DAEMON_LINK_ALBUM=${TELEGRAM_DAEMON_LINK_ALBUM:-1}
+      # 自动加入未加入的邀请链接频道；改变账号状态，默认关闭。
+      - TELEGRAM_DAEMON_LINK_AUTO_JOIN=${TELEGRAM_DAEMON_LINK_AUTO_JOIN:-0}
+      - TELEGRAM_DAEMON_LINK_MAX_MESSAGES=${TELEGRAM_DAEMON_LINK_MAX_MESSAGES:-50}
       - TELEGRAM_DAEMON_PROXY_RESOLVE_ONCE=1
       # 开启 Web UI 鉴权；留空则为开放访问（老行为）
       - TELEGRAM_DAEMON_WEB_TOKEN=${TELEGRAM_DAEMON_WEB_TOKEN:-}

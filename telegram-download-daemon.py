@@ -43,9 +43,20 @@ from tdd_utils import (
     sanitize_filename,
 )
 from fast_download import download_file as fast_download_file, get_parallel_location
+from tg_links import parse_telegram_links, utf16_slice
 
 from telethon import TelegramClient, events, __version__
-from telethon.tl.types import PeerChannel, DocumentAttributeFilename, DocumentAttributeVideo
+from telethon.tl.functions.messages import (
+    CheckChatInviteRequest,
+    ImportChatInviteRequest,
+)
+from telethon.tl.types import (
+    PeerChannel,
+    DocumentAttributeFilename,
+    DocumentAttributeVideo,
+    MessageEntityTextUrl,
+    MessageEntityUrl,
+)
 from telethon.errors import AuthKeyDuplicatedError, SessionPasswordNeededError
 import logging
 from logging.handlers import RotatingFileHandler
@@ -143,6 +154,27 @@ TELEGRAM_DAEMON_QUEUE_WARN_SECONDS=int(getenv("TELEGRAM_DAEMON_QUEUE_WARN_SECOND
 TELEGRAM_DAEMON_PARALLEL_CONNECTIONS=int(getenv("TELEGRAM_DAEMON_PARALLEL_CONNECTIONS", "1"))
 # 只有体积 >= 该阈值（MB）的文件才走并行下载；小文件并行收益低且更易触发限流。默认 10MB。
 TELEGRAM_DAEMON_PARALLEL_MIN_SIZE_MB=int(getenv("TELEGRAM_DAEMON_PARALLEL_MIN_SIZE_MB", "10"))
+
+
+def _env_flag(name, default="0"):
+    return str(getenv(name, default)).strip().lower() in ("1", "true", "yes", "on")
+
+
+# ---------------------------------------------------------------------------
+# 消息链接下载（私密频道链接监听）
+# ---------------------------------------------------------------------------
+# 被监听频道里出现 https://t.me/c/<频道内部ID>/<消息ID> 这类链接时，守护进程会用
+# 当前登录的账号把对应消息抓回来并下载其中的媒体（等价于 tg_forward_bot 里 tdl
+# 的能力，但复用了本项目的队列 / 数据库 / Web UI / 重试机制）。
+# 前提：登录的账号本身是那个私密频道的成员，否则 Telegram 会直接拒绝。
+TELEGRAM_DAEMON_LINK_DOWNLOAD=_env_flag("TELEGRAM_DAEMON_LINK_DOWNLOAD", "1")
+# 链接指向相册（grouped_id）中的一条时，是否把整组一起下载（链接带 ?single 时始终只下这一条）
+TELEGRAM_DAEMON_LINK_ALBUM=_env_flag("TELEGRAM_DAEMON_LINK_ALBUM", "1")
+# 遇到未加入的 t.me/+xxx 邀请链接时，是否用当前账号自动加入该频道。
+# 默认关闭：这是会改变账号状态的动作，需要显式开启。
+TELEGRAM_DAEMON_LINK_AUTO_JOIN=_env_flag("TELEGRAM_DAEMON_LINK_AUTO_JOIN", "0")
+# 单条消息里所有链接合计最多展开多少条 Telegram 消息，防止 a-b 区间链接把队列打爆
+TELEGRAM_DAEMON_LINK_MAX_MESSAGES=int(getenv("TELEGRAM_DAEMON_LINK_MAX_MESSAGES", "50"))
 
 parser = argparse.ArgumentParser(
     description="Script to download files from a Telegram Channel.")
@@ -264,6 +296,53 @@ parser.add_argument(
     'only files at least this many MB use parallel download (default is '
     'TELEGRAM_DAEMON_PARALLEL_MIN_SIZE_MB env var).'
 )
+parser.add_argument(
+    "--link-download",
+    dest="link_download",
+    action="store_true",
+    default=TELEGRAM_DAEMON_LINK_DOWNLOAD,
+    help=
+    'Download the media behind Telegram message links (t.me/c/<id>/<msg>, t.me/<user>/<msg>, ...) '
+    'posted in the monitored channel. Default is TELEGRAM_DAEMON_LINK_DOWNLOAD env var (enabled).'
+)
+parser.add_argument(
+    "--no-link-download",
+    dest="link_download",
+    action="store_false",
+    help='Ignore Telegram message links and keep treating plain text as commands only.'
+)
+parser.add_argument(
+    "--link-album",
+    dest="link_album",
+    action="store_true",
+    default=TELEGRAM_DAEMON_LINK_ALBUM,
+    help=
+    'When a link points to one item of an album, queue the whole album (links carrying "?single" '
+    'always download just that item). Default is TELEGRAM_DAEMON_LINK_ALBUM env var (enabled).'
+)
+parser.add_argument(
+    "--no-link-album",
+    dest="link_album",
+    action="store_false",
+    help='Only download the exact message the link points to, never the rest of its album.'
+)
+parser.add_argument(
+    "--link-auto-join",
+    dest="link_auto_join",
+    action="store_true",
+    default=TELEGRAM_DAEMON_LINK_AUTO_JOIN,
+    help=
+    'Automatically join private channels through t.me/+<hash> invite links when not a member yet. '
+    'Default is TELEGRAM_DAEMON_LINK_AUTO_JOIN env var (disabled).'
+)
+parser.add_argument(
+    "--link-max-messages",
+    type=int,
+    default=TELEGRAM_DAEMON_LINK_MAX_MESSAGES,
+    help=
+    'Maximum number of Telegram messages a single incoming text may expand to '
+    '(default is TELEGRAM_DAEMON_LINK_MAX_MESSAGES env var).'
+)
 args = parser.parse_args()
 
 
@@ -305,6 +384,10 @@ start_timeout = TELEGRAM_DAEMON_START_TIMEOUT
 no_progress_timeout = TELEGRAM_DAEMON_NO_PROGRESS_TIMEOUT
 max_retries = TELEGRAM_DAEMON_MAX_RETRIES
 notify_failure = TELEGRAM_DAEMON_NOTIFY_FAILURE
+link_download_enabled = bool(args.link_download)
+link_album_enabled = bool(args.link_album)
+link_auto_join_enabled = bool(args.link_auto_join)
+link_max_messages = max(1, int(args.link_max_messages))
 lastUpdate = 0
 
 if not tempFolder:
@@ -1871,6 +1954,42 @@ def build_message_link(message_or_event) -> str:
     return f"https://t.me/c/{source_channel_id}/{message_id}"
 
 
+def extract_entity_urls(message_obj) -> list:
+    """把消息实体里的 URL 抽出来。
+
+    覆盖两种情况：``MessageEntityTextUrl``（显示文字是中文/表情，真链接藏在实体里）
+    和 ``MessageEntityUrl``（裸链接，实体只给出正文里的 offset/length）。后者其实
+    正则也能扫到，这里一并取出是为了兼容表情/代理字符导致偏移的极端文本。
+    """
+    urls = []
+    entities = getattr(message_obj, 'entities', None) or []
+    raw_text = getattr(message_obj, 'message', '') or ''
+
+    for entity in entities:
+        if isinstance(entity, MessageEntityTextUrl):
+            if entity.url:
+                urls.append(entity.url)
+        elif isinstance(entity, MessageEntityUrl):
+            # Telegram 的 offset/length 以 UTF-16 码元计，直接用字符下标会被 emoji 顶偏
+            sliced = utf16_slice(raw_text, entity.offset, entity.length)
+            if sliced:
+                urls.append(sliced)
+    return urls
+
+
+def extract_telegram_links(message_obj, max_messages: int) -> list:
+    """从一条消息里解析出所有可下载的 Telegram 消息链接。"""
+    message_obj = get_message_object(message_obj)
+    text = getattr(message_obj, 'message', '') or ''
+    if not text:
+        return []
+    return parse_telegram_links(
+        text,
+        extra_urls=extract_entity_urls(message_obj),
+        max_range=max_messages,
+    )
+
+
 def getFilename(message_or_event) -> str:
     message_obj = get_message_object(message_or_event)
     mediaFileName = "unknown"
@@ -1923,6 +2042,13 @@ try:
     logger.info(f"Download folder: {downloadFolder}, Temp folder: {tempFolder}")
     logger.info(f"Worker count: {worker_count}")
     logger.info(f"Download timeout: {download_timeout}s, Start timeout: {start_timeout}s, Update frequency: {updateFrequency}s, Max retries: {max_retries}, Notify failure: {notify_failure}")
+    logger.info(
+        "Message link download: %s (album=%s, auto-join=%s, max messages per text=%s)",
+        "enabled" if link_download_enabled else "disabled",
+        link_album_enabled,
+        link_auto_join_enabled,
+        link_max_messages,
+    )
     logger.info("Session lock path: %s", getLockPath())
     acquireProcessLock()
     
@@ -2265,7 +2391,25 @@ try:
                 conn.commit()
                 return existing_download_id
 
-        async def enqueue_download_message(message_obj, notice_template="{0} added to queue", target_dir_override=None, existing_download_id=None, silent=False, recovery_note=None):
+        def is_monitored_channel_message(message_obj) -> bool:
+            """消息是否来自被监听的频道本身（区别于通过链接抓回来的外部消息）。"""
+            return get_source_channel_id(message_obj) == channel_id
+
+        async def notify_about_message(message_obj, text, reply_target=None):
+            """把状态 / 失败通知发回去，且**绝不**发进别人的频道。
+
+            通过链接抓回来的消息属于外部私密频道，直接 ``message.reply()`` 会往人家
+            频道里发消息。这里的规则是：优先回复调用方指定的 reply_target（通常是
+            被监听频道里那条含链接的消息），否则只有来源就是被监听频道时才直接回复，
+            剩下的情况统一发到被监听频道。
+            """
+            if reply_target is not None:
+                return await reply_target.reply(text)
+            if is_monitored_channel_message(message_obj):
+                return await message_obj.reply(text)
+            return await client.send_message(peerChannel, text)
+
+        async def enqueue_download_message(message_obj, notice_template="{0} added to queue", target_dir_override=None, existing_download_id=None, silent=False, recovery_note=None, reply_target=None):
             is_photo = getattr(message_obj, 'photo', None) is not None
             is_document = getattr(message_obj, 'document', None) is not None
             if not (is_photo or is_document):
@@ -2275,7 +2419,9 @@ try:
             temp_path = build_safe_path(tempFolder, f"{filename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}")
             root_path = build_safe_path(downloadFolder, filename)
             if path.exists(temp_path) and duplicates == "ignore":
-                status_message = None if silent else await message_obj.reply("{0} already exists. Ignoring it.".format(filename))
+                status_message = None if silent else await notify_about_message(
+                    message_obj, "{0} already exists. Ignoring it.".format(filename), reply_target
+                )
                 logger.info(f"Ignoring duplicate file: {filename}")
                 return {'queued': False, 'filename': filename, 'message': status_message}
 
@@ -2285,7 +2431,9 @@ try:
                 existing_download_id=existing_download_id,
                 recovery_note=recovery_note
             )
-            status_message = None if silent else await message_obj.reply(notice_template.format(filename))
+            status_message = None if silent else await notify_about_message(
+                message_obj, notice_template.format(filename), reply_target
+            )
             queue_item = [message_obj, status_message, target_dir_override, download_id, time.time()]
             queue_type = await push_queue_item(queue_item)
 
@@ -2311,6 +2459,203 @@ try:
                 existing_download_id=existing_download_id,
                 recovery_note="Manual retry via web UI" if existing_download_id else None,
             )
+
+        # ------------------------------------------------------------------
+        # 消息链接下载：把频道里出现的 t.me 消息链接还原成真正的消息再入队
+        # ------------------------------------------------------------------
+        link_entity_cache = {}
+        last_dialog_refresh = [0.0]
+        DIALOG_REFRESH_COOLDOWN = 300  # 秒
+        # 一条链接消息最多逐个回复多少个文件（超出部分静默入队，只在汇总里体现）
+        LINK_STATUS_MESSAGE_LIMIT = 5
+
+        async def refresh_dialog_cache(force=False):
+            """拉一遍会话列表，把私密频道的 access_hash 灌进 Telethon 的实体缓存。
+
+            ``t.me/c/<id>/<msg>`` 链接只给出频道内部 ID，没有 access_hash；只有当这个
+            频道出现在账号的会话列表里、被 Telethon 记进 session 之后，``PeerChannel(id)``
+            才能解析成功。冷启动 / 新加入的频道会命中这条路径。
+            """
+            now = time.time()
+            if not force and (now - last_dialog_refresh[0]) < DIALOG_REFRESH_COOLDOWN:
+                return False
+            last_dialog_refresh[0] = now
+            logger.info("Refreshing dialog cache to resolve private channel links")
+            await client.get_dialogs()
+            return True
+
+        async def resolve_link_entity(link):
+            """把一条已解析的链接映射成 Telethon 实体（频道对象）。"""
+            cache_key = link.entity_key
+            cached = link_entity_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+            if link.kind == 'private':
+                try:
+                    entity = await client.get_entity(PeerChannel(link.channel_id))
+                except (ValueError, TypeError):
+                    # 实体不在缓存里：刷新会话列表后再试一次
+                    await refresh_dialog_cache(force=True)
+                    try:
+                        entity = await client.get_entity(PeerChannel(link.channel_id))
+                    except (ValueError, TypeError) as exc:
+                        raise ValueError(
+                            "当前账号没有这个私密频道的访问权限（需要先加入该频道）"
+                        ) from exc
+            elif link.kind == 'public':
+                entity = await client.get_entity(link.username)
+            else:
+                invite = await client(CheckChatInviteRequest(link.invite_hash))
+                entity = getattr(invite, 'chat', None)
+                if entity is None:
+                    if not link_auto_join_enabled:
+                        raise ValueError(
+                            "当前账号尚未加入该邀请链接对应的频道；"
+                            "设置 TELEGRAM_DAEMON_LINK_AUTO_JOIN=1 可允许自动加入"
+                        )
+                    updates = await client(ImportChatInviteRequest(link.invite_hash))
+                    chats = getattr(updates, 'chats', None) or []
+                    if not chats:
+                        raise ValueError("加入邀请链接对应的频道失败")
+                    entity = chats[0]
+                    logger.info("Joined chat via invite link: %s", getattr(entity, 'title', entity))
+
+            link_entity_cache[cache_key] = entity
+            return entity
+
+        async def fetch_link_messages(link, budget):
+            """按链接取回对应的消息对象列表（已按 budget 截断）。"""
+            entity = await resolve_link_entity(link)
+
+            wanted_ids = list(link.message_ids)[:max(budget, 0)]
+            if not wanted_ids:
+                return []
+
+            fetched = await client.get_messages(entity, ids=wanted_ids)
+            if fetched is None:
+                return []
+            if not isinstance(fetched, list):
+                fetched = [fetched]
+            messages = [m for m in fetched if m is not None]
+
+            # 链接指向相册中的一条时，默认把整组一起下载；带 ?single 的链接尊重原意只下这条
+            if link_album_enabled and not link.single and len(wanted_ids) == 1 and messages:
+                base = messages[0]
+                grouped_id = getattr(base, 'grouped_id', None)
+                if grouped_id:
+                    # 相册最多 10 条且 ID 连续，取前后各 9 条足够覆盖
+                    neighborhood = list(range(max(1, base.id - 9), base.id + 10))
+                    siblings = await client.get_messages(entity, ids=neighborhood)
+                    group = [
+                        m for m in (siblings or [])
+                        if m is not None and getattr(m, 'grouped_id', None) == grouped_id
+                    ]
+                    if group:
+                        group.sort(key=lambda m: m.id)
+                        messages = group[:max(budget, 1)]
+                        logger.info(
+                            "Link points to an album (grouped_id=%s); expanded to %s messages",
+                            grouped_id, len(messages)
+                        )
+
+            return messages
+
+        async def handle_link_message(event, links):
+            """处理"频道里收到一条含 Telegram 消息链接的文本"这件事。"""
+            source_message = event.message
+            status_message = None
+            with contextlib.suppress(Exception):
+                status_message = await source_message.reply(
+                    f"🔗 收到 {len(links)} 个 Telegram 消息链接，正在解析…"
+                )
+
+            budget = link_max_messages
+            queued_total = 0
+            skipped_total = 0
+            notes = []
+
+            for link in links:
+                label = link.describe()
+                if budget <= 0:
+                    notes.append(f"⏭ {label}：已达单条消息 {link_max_messages} 条上限，跳过")
+                    continue
+                try:
+                    messages = await fetch_link_messages(link, budget)
+                except Exception as resolve_error:
+                    logger.warning("Failed to resolve link %s: %s", label, resolve_error, exc_info=True)
+                    notes.append(f"❌ {label}：{resolve_error}")
+                    continue
+
+                if not messages:
+                    notes.append(f"⚠️ {label}：消息不存在或已被删除")
+                    continue
+
+                queued_here = 0
+                failed_here = 0
+                truncated_here = False
+                for message_obj in messages:
+                    if budget <= 0:
+                        truncated_here = True
+                        break
+                    has_media = (
+                        getattr(message_obj, 'photo', None) is not None
+                        or getattr(message_obj, 'document', None) is not None
+                    )
+                    if not has_media:
+                        skipped_total += 1
+                        continue
+                    try:
+                        result = await enqueue_download_message(
+                            message_obj,
+                            "{0} added to queue",
+                            reply_target=source_message,
+                            # 一条消息展开出一堆文件时不再逐个回复，避免触发 Telegram 限流；
+                            # 后续文件的进度看 Web UI 或末尾的汇总即可。
+                            silent=queued_total >= LINK_STATUS_MESSAGE_LIMIT,
+                        )
+                    except Exception as enqueue_error:
+                        failed_here += 1
+                        logger.error(
+                            "Failed to enqueue linked message %s: %s",
+                            getattr(message_obj, 'id', None), enqueue_error, exc_info=True
+                        )
+                        notes.append(f"❌ {label}：入队失败（{enqueue_error}）")
+                        continue
+                    if result.get('queued'):
+                        queued_here += 1
+                        queued_total += 1
+                        budget -= 1
+                    else:
+                        skipped_total += 1
+
+                if queued_here:
+                    note = f"✅ {label}：{queued_here} 个文件已入队"
+                    if truncated_here:
+                        note += f"（已达 {link_max_messages} 条上限，其余未处理）"
+                    notes.append(note)
+                elif not failed_here:
+                    notes.append(f"⚠️ {label}：消息里没有可下载的文件")
+
+            summary_lines = [
+                f"🔗 链接解析完成：入队 {queued_total} 个文件"
+                + (f"，跳过 {skipped_total} 条" if skipped_total else "")
+            ]
+            summary_lines.extend(notes[:10])
+            if len(notes) > 10:
+                summary_lines.append(f"…另有 {len(notes) - 10} 条结果，详见日志")
+            summary = "\n".join(summary_lines)
+
+            logger.info(
+                "Link request handled: links=%s queued=%s skipped=%s",
+                len(links), queued_total, skipped_total
+            )
+            if status_message is not None:
+                with contextlib.suppress(Exception):
+                    await status_message.edit(summary)
+            elif queued_total == 0:
+                with contextlib.suppress(Exception):
+                    await source_message.reply(summary)
 
         async def restore_pending_downloads():
             async with db_lock:
@@ -2490,13 +2835,31 @@ try:
                 return
 
             logger.debug(f"Received new message event: {event}")
-            
+
             try:
+                # 私密频道链接优先：文本里带 t.me 消息链接时，先把链接指向的消息抓回来。
+                # 必须放在媒体分支之前——带链接的文本消息通常自带网页预览（MessageMediaWebPage），
+                # 会被 event.photo / event.media 误判成"预览图可下载"或"不可下载的媒体"。
+                # 只有真的解析出链接才走这条分支，其余消息的行为与之前完全一致。
+                #
+                # 这里刻意不看 event.out：号主往往就是用自己的账号把链接贴进频道的。
+                # 守护进程自己的回复里只有 link.describe()（不含 t.me 链接），解析结果为空，
+                # 因此不会自触发。
+                if link_download_enabled:
+                    links = extract_telegram_links(event.message, link_max_messages)
+                    if links:
+                        logger.info(
+                            "Received %s Telegram message link(s): %s",
+                            len(links), ", ".join(link.describe() for link in links)
+                        )
+                        await handle_link_message(event, links)
+                        return
+
                 # 检查是否是可下载的媒体消息
                 # 使用 event.photo 和 event.document 快捷方式，更可靠
                 is_photo = event.photo is not None
                 is_document = event.document is not None
-                
+
                 if is_photo or is_document:
                     await enqueue_download_message(event.message)
                 elif event.media:
@@ -2581,6 +2944,8 @@ try:
                             logger.error(f"Error executing command 'queue': {e}")
                     else:
                         output = "Available commands: list, status, clean, queue"
+                        if link_download_enabled:
+                            output += "\n也可以直接发送 Telegram 消息链接（含私密频道 t.me/c/... 链接）自动下载。"
                         logger.info(f"Unknown command: {command}")
 
                     await log_reply(event, output)
@@ -3013,10 +3378,12 @@ try:
                         
                         # 发送失败通知到 Telegram
                         if notify_failure:
-                            failure_msg = f"❌ 下载失败（已重试{max_retries}次）\n原因: {error_msg[:200]}"
+                            failure_msg = f"❌ {filename} 下载失败（已重试{max_retries}次）\n原因: {error_msg[:200]}"
                             try:
-                                # 回复原始文件消息，让用户直观看到失败的文件
-                                await message_obj.reply(failure_msg)
+                                # 回复原始文件消息，让用户直观看到失败的文件。
+                                # 通过链接抓回来的外部消息不能直接回复（会发进别人的频道），
+                                # notify_about_message 会把通知改发到被监听频道。
+                                await notify_about_message(message_obj, failure_msg)
                             except Exception as reply_error:
                                 logger.error(f'Error sending failure reply: {reply_error}')
                     
