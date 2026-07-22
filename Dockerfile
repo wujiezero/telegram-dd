@@ -10,9 +10,18 @@ FROM python:3.12-slim AS compile-image
 COPY requirements.txt ./
 
 # 先装在 /install 下，便于后续 COPY --from 直接拿到纯净的 site-packages
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt || \
-    pip install --no-cache-dir --prefix=/install -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt || \
-    pip install --no-cache-dir --prefix=/install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
+#
+# 前三次尝试显式清掉代理变量：docker CLI 会把 ~/.docker/config.json 里 proxies 段的
+# 配置自动注入成构建期的 HTTP_PROXY/HTTPS_PROXY。宿主上写的往往是 127.0.0.1:xxxx，
+# 而在构建容器里 127.0.0.1 指的是容器自己，于是 pip 每个请求都撞上
+# "Cannot connect to proxy / Connection reset by peer"——连本来直连就通的国内源
+# 也一起遭殃。国内源排在前面（更快且无需代理）；最后一档保留原始代理环境去官方源，
+# 供确实必须走代理才能出网的主机兜底。
+RUN NOPROXY="env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy -u ALL_PROXY -u all_proxy -u NO_PROXY -u no_proxy"; \
+    $NOPROXY pip install --no-cache-dir --prefix=/install -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt || \
+    $NOPROXY pip install --no-cache-dir --prefix=/install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt || \
+    $NOPROXY pip install --no-cache-dir --prefix=/install -r requirements.txt || \
+    pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 FROM python:3.12-slim AS run-image
 
