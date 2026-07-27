@@ -853,6 +853,10 @@ active_download_tasks = {}  # download_id(str) -> asyncio.Task
 active_queue_items_by_id = {}
 web_cancel_scheduler = None
 cancelled_download_ids = set()
+# 暂停/恢复支持
+paused_download_ids = {}   # download_id(str) -> threading.Event（is_set=可运行，cleared=暂停）
+web_pause_scheduler = None
+web_resume_scheduler = None
 telegram_auth_state = {
     'authorized': False,
     'awaiting_code': False,
@@ -1224,13 +1228,13 @@ def api_tasks():
             tasks.append({
                 'task_id': str(task_id),
                 'filename': filename,
-                'status': 'downloading',
+                'status': 'paused' if task_info.get('paused') else 'downloading',
                 'progress': progress,
                 # 用任务首次入 in_progress 时记录的真实开始时间，而不是请求时刻
                 'downloadTime': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(started_at)) if started_at else None,
                 'started_at': started_at,
                 'size': size,
-                'speed_bps': speed_bps,
+                'speed_bps': 0 if task_info.get('paused') else speed_bps,
                 'source_message_link': source_message_link
             })
         
@@ -1514,6 +1518,54 @@ def api_cancel():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/pause', methods=['POST'])
+def api_pause():
+    """暂停一个正在下载的任务。"""
+    try:
+        task_id = request.args.get('task_id', type=str)
+        if not task_id:
+            return jsonify({'error': 'Missing task_id parameter'}), 400
+
+        actual_task_id = task_id.split('-')[-1]
+        if not actual_task_id.isdigit():
+            return jsonify({'error': 'Invalid task_id'}), 400
+
+        if web_pause_scheduler is None:
+            return jsonify({'error': 'Pause service is not ready yet'}), 503
+
+        result = web_pause_scheduler(int(actual_task_id))
+        if not result.get('found'):
+            return jsonify({'error': 'Task is not active or already paused'}), 404
+        return jsonify({'success': True, **result})
+    except Exception as e:
+        logger.error(f'API pause error: {e}', exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/resume', methods=['POST'])
+def api_resume():
+    """恢复一个已暂停的任务。"""
+    try:
+        task_id = request.args.get('task_id', type=str)
+        if not task_id:
+            return jsonify({'error': 'Missing task_id parameter'}), 400
+
+        actual_task_id = task_id.split('-')[-1]
+        if not actual_task_id.isdigit():
+            return jsonify({'error': 'Invalid task_id'}), 400
+
+        if web_resume_scheduler is None:
+            return jsonify({'error': 'Resume service is not ready yet'}), 503
+
+        result = web_resume_scheduler(int(actual_task_id))
+        if not result.get('found'):
+            return jsonify({'error': 'Task is not paused'}), 404
+        return jsonify({'success': True, **result})
+    except Exception as e:
+        logger.error(f'API resume error: {e}', exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/delete', methods=['DELETE'])
 def api_delete():
     try:
@@ -1550,7 +1602,7 @@ def api_delete():
         download_path, thumbnail_path, stored_filename, stored_status = result
 
         # 二次兜底：即使 web_in_progress 没跟上，也拒绝删 downloading / queued
-        if stored_status in ('downloading', 'queued'):
+        if stored_status in ('downloading', 'queued', 'paused'):
             local_cursor.close()
             local_conn.close()
             return jsonify({
@@ -2787,16 +2839,20 @@ try:
                     found_kind = 'queued'
 
             if found_kind is None:
-                # 再尝试取消正在下载的
+                # 再尝试取消正在下载的（包括暂停中的）
                 download_task = active_download_tasks.get(download_id_str)
                 if download_task is not None and not download_task.done():
                     cancelled_download_ids.add(download_id_str)
+                    # 如果任务处于暂停状态，先唤醒回调以便取消能正常传播
+                    pause_evt = paused_download_ids.get(download_id_str)
+                    if pause_evt is not None:
+                        pause_evt.set()
                     download_task.cancel()
                     found_kind = 'downloading'
 
             if found_kind is None:
                 # 窗口期兜底：既不在队列也没注册下载任务，但 DB 里可能还是
-                # queued/downloading —— 这是 dequeue 与 register_active_task 之间的缝隙。
+                # queued/downloading/paused —— 这是 dequeue 与 register_active_task 之间的缝隙。
                 # 直接把 cancel 意图登记进 cancelled_download_ids；worker 一旦注册任务
                 # 就会看到并立即 self-cancel。同时把 DB 标记为 cancelled，UI 立刻正确。
                 async with db_lock:
@@ -2805,7 +2861,7 @@ try:
                     )
                     row = cursor.fetchone()
                     current_status = row[0] if row else None
-                if current_status in ('queued', 'downloading'):
+                if current_status in ('queued', 'downloading', 'paused'):
                     cancelled_download_ids.add(download_id_str)
                     async with db_lock:
                         cursor.execute(
@@ -2824,9 +2880,107 @@ try:
             future = asyncio.run_coroutine_threadsafe(cancel_download(download_id_int), main_loop)
             return future.result(timeout=30)
 
-        global web_retry_scheduler, web_cancel_scheduler
+        async def pause_download(download_id_int):
+            """暂停一个正在下载的任务。通过清除 threading.Event 阻塞进度回调。"""
+            download_id = int(download_id_int)
+            download_id_str = str(download_id)
+
+            # 只能暂停正在下载的任务
+            download_task = active_download_tasks.get(download_id_str)
+            if download_task is None or download_task.done():
+                return {'found': False}
+
+            # 检查 DB 状态确认是 downloading
+            async with db_lock:
+                cursor.execute('SELECT status FROM downloads WHERE id = ?', (download_id,))
+                row = cursor.fetchone()
+            if not row or row[0] != 'downloading':
+                return {'found': False}
+
+            # 创建或清除 Event（cleared = 暂停状态）
+            if download_id_str not in paused_download_ids:
+                evt = threading.Event()
+                evt.set()  # 默认可运行
+                paused_download_ids[download_id_str] = evt
+            evt = paused_download_ids[download_id_str]
+            evt.clear()  # 暂停：回调将阻塞
+
+            # 更新 DB 状态
+            async with db_lock:
+                cursor.execute(
+                    'UPDATE downloads SET status = ?, error_message = NULL WHERE id = ?',
+                    ('paused', download_id)
+                )
+                conn.commit()
+
+            # 更新内存状态
+            with sync_lock:
+                entry = in_progress.get(download_id_str)
+                if entry:
+                    entry['paused'] = True
+                    entry['speed_bps'] = 0
+
+            emit_status_update()
+            socketio.emit('download_progress', {
+                'task_id': download_id,
+                'status': 'paused',
+                'speed_bps': 0,
+            })
+            return {'found': True, 'state': 'paused', 'download_id': download_id}
+
+        async def resume_download(download_id_int):
+            """恢复一个已暂停的任务。设置 threading.Event 解除回调阻塞。"""
+            download_id = int(download_id_int)
+            download_id_str = str(download_id)
+
+            evt = paused_download_ids.get(download_id_str)
+            if evt is None:
+                return {'found': False}
+
+            # 检查 DB 状态
+            async with db_lock:
+                cursor.execute('SELECT status FROM downloads WHERE id = ?', (download_id,))
+                row = cursor.fetchone()
+            if not row or row[0] != 'paused':
+                return {'found': False}
+
+            # 恢复：设置 Event，回调将继续执行
+            evt.set()
+
+            # 更新 DB 状态
+            async with db_lock:
+                cursor.execute(
+                    'UPDATE downloads SET status = ?, error_message = NULL WHERE id = ?',
+                    ('downloading', download_id)
+                )
+                conn.commit()
+
+            # 更新内存状态
+            with sync_lock:
+                entry = in_progress.get(download_id_str)
+                if entry:
+                    entry.pop('paused', None)
+
+            emit_status_update()
+            socketio.emit('download_progress', {
+                'task_id': download_id,
+                'status': 'downloading',
+            })
+            return {'found': True, 'state': 'resumed', 'download_id': download_id}
+
+        def schedule_pause(download_id_int):
+            future = asyncio.run_coroutine_threadsafe(pause_download(download_id_int), main_loop)
+            return future.result(timeout=30)
+
+        def schedule_resume(download_id_int):
+            future = asyncio.run_coroutine_threadsafe(resume_download(download_id_int), main_loop)
+            return future.result(timeout=30)
+
+        global web_retry_scheduler, web_cancel_scheduler, web_pause_scheduler, web_resume_scheduler
         web_retry_scheduler = schedule_retry
         web_cancel_scheduler = schedule_cancel
+        web_pause_scheduler = schedule_pause
+        web_resume_scheduler = schedule_resume
         await restore_pending_downloads()
         
         @client.on(events.NewMessage())
@@ -3117,6 +3271,19 @@ try:
                         # 由于回调是同步的，我们不能直接await异步函数
                         # 但我们可以记录进度，然后在合适的时候更新
                         nonlocal lastUpdate
+
+                        # === 暂停支持 ===
+                        # 如果任务被暂停，阻塞在此直到恢复或取消
+                        pause_evt = paused_download_ids.get(str(download_id))
+                        if pause_evt is not None and not pause_evt.is_set():
+                            logger.info(f"Download paused: {filename} (id={download_id})")
+                            while not pause_evt.wait(timeout=0.5):
+                                # 每 0.5s 检查一次：如果下载任务已被取消则退出
+                                if download_task is not None and download_task.done():
+                                    logger.info(f"Paused download was cancelled: {filename}")
+                                    return
+                            logger.info(f"Download resumed: {filename} (id={download_id})")
+
                         # total 可能在媒体元信息缺失时为 0；避免除零异常
                         percentage = math.trunc(received / total * 10000) / 100 if total else 0.0
                         progress_message = "{0} % ({1} / {2})".format(percentage, received, total)
@@ -3244,8 +3411,22 @@ try:
                             raise asyncio.TimeoutError(f"Download did not start within {start_timeout} seconds")
                         
                         # 等待下载完成或总超时
+                        paused_accumulated = 0.0
+                        pause_check_time = None
                         while not download_task.done():
-                            elapsed = time.time() - start_time
+                            # 暂停期间不计入超时
+                            evt = paused_download_ids.get(str(download_id))
+                            if evt is not None and not evt.is_set():
+                                if pause_check_time is None:
+                                    pause_check_time = time.time()
+                                await asyncio.sleep(1)
+                                continue
+                            else:
+                                if pause_check_time is not None:
+                                    paused_accumulated += time.time() - pause_check_time
+                                    pause_check_time = None
+
+                            elapsed = (time.time() - start_time) - paused_accumulated
                             if elapsed > download_timeout:
                                 raise asyncio.TimeoutError(f"Download exceeded {download_timeout} seconds")
                             if download_started[0] and (time.time() - last_progress_time[0]) > no_progress_timeout:
@@ -3295,6 +3476,7 @@ try:
                     if download_id is not None:
                         active_download_tasks.pop(str(download_id), None)
                         cancelled_download_ids.discard(str(download_id))
+                        paused_download_ids.pop(str(download_id), None)
 
                     # Update status after download completes
                     emit_status_update()
@@ -3315,6 +3497,8 @@ try:
                     if download_id is not None and str(download_id) in cancelled_download_ids:
                         was_cancelled = True
                         cancelled_download_ids.discard(str(download_id))
+                    # 清理暂停状态（如果在暂停期间被取消）
+                    paused_download_ids.pop(str(download_id), None)
 
                     if was_cancelled:
                         if download_id:
@@ -3335,6 +3519,7 @@ try:
                         # 清理任务注册表
                         if download_id is not None:
                             active_download_tasks.pop(str(download_id), None)
+                            paused_download_ids.pop(str(download_id), None)
                         emit_status_update()
                         if worker_queue is not None:
                             worker_queue.task_done()
@@ -3394,6 +3579,7 @@ try:
                     # 失败/重试分支都清理 active_download_tasks；重试新创建任务时会重新注册
                     if download_id is not None:
                         active_download_tasks.pop(str(download_id), None)
+                        paused_download_ids.pop(str(download_id), None)
 
         tasks = []
         loop = asyncio.get_running_loop()

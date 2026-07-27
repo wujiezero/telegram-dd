@@ -163,12 +163,25 @@
             box-shadow: var(--glass-shadow);
             margin: 0 0 14px;
             overflow: hidden;
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+        }
+
+        .card::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            background: linear-gradient(135deg, var(--glass-highlight), transparent 60%);
+            opacity: 0.4;
+            pointer-events: none;
+            z-index: 0;
         }
 
         .card:hover {
             background: color-mix(in oklab, var(--glass-bg) 85%, var(--glass-highlight));
-            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+            box-shadow: 0 14px 44px rgba(0, 0, 0, 0.45);
+            transform: translateY(-1px);
         }
 
         .header {
@@ -206,6 +219,16 @@
             align-items: center;
             justify-content: center;
             box-shadow: 0 4px 12px rgba(46, 166, 224, 0.35);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .logo::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, rgba(255,255,255,0.2), transparent 60%);
+            border-radius: inherit;
         }
 
         .logo svg {
@@ -370,6 +393,26 @@
             flex-direction: column;
             gap: 3px;
             min-width: 0;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .stat::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--accent), transparent);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        @media (hover: hover) {
+            .stat:hover::after { opacity: 0.6; }
+            .stat:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,0.12); }
         }
 
         .stat-label {
@@ -494,6 +537,8 @@
             background: var(--accent-soft);
             color: var(--accent);
             transform: scale(1.02);
+            box-shadow: 0 2px 8px rgba(46, 166, 224, 0.15);
+            font-weight: 600;
         }
 
         @media (hover: hover) {
@@ -980,6 +1025,16 @@
         .badge.failed { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
         .badge.cancelled { background: var(--grey-soft); color: var(--text-2); }
         .badge.ignored { background: var(--warning-soft); color: var(--warning); border-color: transparent; }
+        .badge.paused {
+            background: linear-gradient(135deg, rgba(246, 180, 77, 0.2), rgba(246, 180, 77, 0.08));
+            color: var(--warning);
+            border-color: rgba(246, 180, 77, 0.25);
+            animation: pausedPulse 2.5s ease-in-out infinite;
+        }
+        @keyframes pausedPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.65; }
+        }
 
         .row:hover .badge {
             transform: scale(1.05);
@@ -1005,6 +1060,15 @@
             border-radius: 999px;
             transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
             box-shadow: 0 0 10px rgba(46, 166, 224, 0.4);
+            position: relative;
+        }
+
+        .progress > span::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(90deg, transparent 50%, rgba(255,255,255,0.15) 100%);
+            border-radius: inherit;
         }
 
         .progress.indeterminate > span {
@@ -1153,6 +1217,26 @@
             }
         }
 
+        /* 移动端暂停/恢复按钮优化 */
+        @media (max-width: 768px) {
+            .btn.warning, .btn.success {
+                min-height: 38px;
+                font-size: 12px;
+            }
+            /* 暂停行在移动端的边框更明显 */
+            .row.is-paused {
+                border-width: 1.5px;
+            }
+        }
+
+        /* 减少移动端动画以节省电量 */
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.01ms !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
+
         .btn {
             min-height: 36px;
             padding: 8px 14px;
@@ -1279,12 +1363,23 @@
             font-weight: 600;
         }
 
+        .btn.warning:active {
+            transform: scale(0.96);
+            box-shadow: 0 4px 10px rgba(246, 180, 77, 0.25);
+        }
+
         @media (hover: hover) {
             .btn.warning:hover {
                 background: linear-gradient(135deg, #d97706, var(--warning));
                 box-shadow: 0 10px 24px rgba(246, 180, 77, 0.35);
                 transform: translateY(-2px);
             }
+        }
+
+        /* 暂停中的行：添加微妙的边框高亮 */
+        .row.is-paused {
+            border-color: rgba(246, 180, 77, 0.25);
+            background: color-mix(in oklab, var(--glass-bg) 90%, rgba(246, 180, 77, 0.05));
         }
 
         .btn.secondary {
@@ -1483,6 +1578,40 @@
             color: var(--text-3);
         }
 
+        .empty-icon {
+            width: 64px;
+            height: 64px;
+            margin: 0 auto 12px;
+            background: var(--glass-bg);
+            backdrop-filter: blur(var(--blur-strength));
+            -webkit-backdrop-filter: blur(var(--blur-strength));
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: var(--glass-shadow);
+        }
+
+        .empty-icon svg {
+            width: 32px;
+            height: 32px;
+            fill: var(--text-3);
+            opacity: 0.6;
+        }
+
+        .empty-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text-2);
+            margin-bottom: 4px;
+        }
+
+        .empty-sub {
+            font-size: 13px;
+            color: var(--text-3);
+        }
+
         /* 移动端空状态提示更好点 */
         @media (max-width: 768px) {
             .empty {
@@ -1587,27 +1716,44 @@
         }
 
         .toast {
-            background: var(--bg-2);
-            border: 1px solid var(--line);
+            background: var(--glass-bg);
+            backdrop-filter: blur(var(--blur-strength));
+            -webkit-backdrop-filter: blur(var(--blur-strength));
+            border: 1px solid var(--glass-border);
             color: var(--text-1);
-            padding: 10px 14px;
+            padding: 12px 16px;
             border-radius: var(--radius-md);
             font-size: 14px;
             max-width: 420px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+            box-shadow: var(--glass-shadow);
             pointer-events: auto;
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 10px;
             opacity: 0;
-            transform: translateY(10px);
-            transition: opacity 0.2s, transform 0.2s;
+            transform: translateY(12px) scale(0.96);
+            transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
         }
 
-        .toast.show { opacity: 1; transform: translateY(0); }
-        .toast.success { border-color: rgba(79, 209, 154, 0.4); }
-        .toast.error { border-color: rgba(239, 91, 91, 0.4); }
-        .toast.info { border-color: rgba(46, 166, 224, 0.4); }
+        .toast::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 3px;
+            border-radius: 0 2px 2px 0;
+        }
+
+        .toast.show { opacity: 1; transform: translateY(0) scale(1); }
+        .toast.success { border-color: rgba(79, 209, 154, 0.3); }
+        .toast.success::before { background: var(--success); }
+        .toast.error { border-color: rgba(239, 91, 91, 0.3); }
+        .toast.error::before { background: var(--danger); }
+        .toast.info { border-color: rgba(46, 166, 224, 0.3); }
+        .toast.info::before { background: var(--accent); }
 
         .modal-mask {
             position: fixed;
@@ -1788,6 +1934,12 @@
         .conn-indicator.online .led {
             background: var(--success);
             box-shadow: 0 0 6px var(--success);
+            animation: ledPulse 2s ease-in-out infinite;
+        }
+
+        @keyframes ledPulse {
+            0%, 100% { box-shadow: 0 0 4px var(--success); }
+            50% { box-shadow: 0 0 10px var(--success), 0 0 20px rgba(79, 209, 154, 0.3); }
         }
 
         .conn-indicator.offline .led { background: var(--danger); }
@@ -2010,7 +2162,7 @@
             <div class="card-body flush list-container">
                 <div class="loading-overlay is-hidden" id="activeLoading"><div class="spinner"></div></div>
                 <ul class="list" id="activeList">
-                    <li class="empty"><svg viewBox="0 0 24 24"><path d="M12 3C6.48 3 2 7.48 2 13h2a8 8 0 1 1 8 8v2c5.52 0 10-4.48 10-10S17.52 3 12 3Zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H11Z"/></svg><div>暂无正在进行的下载</div></li>
+                    <li class="empty"><div class="empty-icon"><svg viewBox="0 0 24 24"><path d="M12 3C6.48 3 2 7.48 2 13h2a8 8 0 1 1 8 8v2c5.52 0 10-4.48 10-10S17.52 3 12 3Zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H11Z"/></svg></div><div class="empty-title">暂无正在进行的下载</div><div class="empty-sub">新任务会自动出现在这里</div></li>
                 </ul>
             </div>
         </section>
@@ -2351,6 +2503,7 @@
                 case 'failed': return '失败';
                 case 'cancelled': return '已取消';
                 case 'ignored': return '已忽略';
+                case 'paused': return '已暂停';
                 default: return status || '–';
             }
         }
@@ -2612,6 +2765,12 @@
                     <div class="progress progress-lg"><span style="width:${pct.toFixed(2)}%"></span></div>
                     <span class="progress-pct">${pct.toFixed(1)}%</span>
                 </div>`;
+            } else if (task.status === 'paused') {
+                const pct = Math.min(100, percentage);
+                progressHtml = `<div class="progress-line">
+                    <div class="progress" style="opacity:0.6"><span style="width:${pct.toFixed(2)}%;background:linear-gradient(90deg,var(--warning),#d97706)"></span></div>
+                    <span class="progress-pct" style="color:var(--warning)">${pct.toFixed(1)}%</span>
+                </div>`;
             } else if (task.status === 'queued') {
                 progressHtml = `<div class="progress indeterminate"><span></span></div>`;
             }
@@ -2631,9 +2790,15 @@
             else if (task.queue_age_seconds != null) metaBits.push(`已等待 ${Math.max(task.queue_age_seconds, 0)}s`);
             const metaHtml = metaBits.map(escapeHtml).join('<span class="sep"></span>');
 
-            // 按钮按重要性排序：取消（危险）> 源消息（次要）
+            // 按钮按重要性排序：恢复/暂停 > 取消（危险）> 源消息（次要）
             const actions = [];
-            if (task.status === 'downloading' || task.status === 'queued') {
+            if (task.status === 'downloading') {
+                actions.push(`<button class="btn warning" data-action="pause" data-id="${escapeHtml(id)}">暂停</button>`);
+                actions.push(`<button class="btn danger" data-action="cancel" data-id="${escapeHtml(id)}">取消</button>`);
+            } else if (task.status === 'paused') {
+                actions.push(`<button class="btn success" data-action="resume" data-id="${escapeHtml(id)}">恢复</button>`);
+                actions.push(`<button class="btn danger" data-action="cancel" data-id="${escapeHtml(id)}">取消</button>`);
+            } else if (task.status === 'queued') {
                 actions.push(`<button class="btn danger" data-action="cancel" data-id="${escapeHtml(id)}">取消</button>`);
             }
             if (link) {
@@ -2641,7 +2806,7 @@
             }
 
             return `
-                <li class="row" data-id="${escapeHtml(id)}">
+                <li class="row${task.status === 'paused' ? ' is-paused' : ''}" data-id="${escapeHtml(id)}">
                     <div class="row-thumb${thumbTypeClass(iconType)}">${fileIcon(iconType)}</div>
                     <div class="row-main">
                         ${renderPrivateFilename(`<div class="row-name row-name-content" title="${name}">${name}</div>`, privacyKey, task.filename || '')}
@@ -2687,10 +2852,10 @@
             if (item.status === 'failed' || item.status === 'cancelled') {
                 actions.push(`<button class="btn success" data-action="retry" data-id="${item.id}">重试</button>`);
             }
-            if (item.status === 'downloading' || item.status === 'queued') {
+            if (item.status === 'downloading' || item.status === 'queued' || item.status === 'paused') {
                 actions.push(`<button class="btn danger" data-action="cancel" data-id="${item.id}">取消</button>`);
             }
-            if (item.status !== 'downloading' && item.status !== 'queued') {
+            if (item.status !== 'downloading' && item.status !== 'queued' && item.status !== 'paused') {
                 actions.push(`<button class="btn danger" data-action="delete" data-id="${item.id}" data-name="${escapeHtml(item.filename)}" data-status="${escapeHtml(item.status||'')}">删除</button>`);
             }
             actions.push(`<button class="btn secondary" data-action="rename" data-id="${item.id}" data-name="${escapeHtml(item.filename)}">重命名</button>`);
@@ -2765,7 +2930,7 @@
                 return 0;
             });
             if (!tasks.length) {
-                list.innerHTML = `<li class="empty"><svg viewBox="0 0 24 24"><path d="M12 3C6.48 3 2 7.48 2 13h2a8 8 0 1 1 8 8v2c5.52 0 10-4.48 10-10S17.52 3 12 3Zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H11Z"/></svg><div>暂无正在进行的下载</div></li>`;
+                list.innerHTML = `<li class="empty"><div class="empty-icon"><svg viewBox="0 0 24 24"><path d="M12 3C6.48 3 2 7.48 2 13h2a8 8 0 1 1 8 8v2c5.52 0 10-4.48 10-10S17.52 3 12 3Zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H11Z"/></svg></div><div class="empty-title">暂无正在进行的下载</div><div class="empty-sub">新任务会自动出现在这里</div></li>`;
             } else {
                 list.innerHTML = tasks.map(t => taskRowHtml(t)).join('');
             }
@@ -2776,7 +2941,7 @@
         function renderHistory() {
             const list = $('#historyList');
             if (!state.history.length) {
-                list.innerHTML = `<li class="empty"><svg viewBox="0 0 24 24"><path d="M12 3A9 9 0 0 0 3 12H0l4 4 4-4H5a7 7 0 1 1 2.05 4.95L5.64 18.36A9 9 0 1 0 12 3Zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H11Z"/></svg><div>暂无匹配的历史记录</div></li>`;
+                list.innerHTML = `<li class="empty"><div class="empty-icon"><svg viewBox="0 0 24 24"><path d="M12 3A9 9 0 0 0 3 12H0l4 4 4-4H5a7 7 0 1 1 2.05 4.95L5.64 18.36A9 9 0 1 0 12 3Zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H11Z"/></svg></div><div class="empty-title">暂无匹配的历史记录</div><div class="empty-sub">尝试调整筛选条件</div></li>`;
             } else {
                 list.innerHTML = state.history.map(historyRowHtml).join('');
             }
@@ -2858,6 +3023,26 @@
                 loadActive(),
                 state.tab === 'history' ? loadHistory() : Promise.resolve()
             ]);
+        }
+
+        async function pauseTask(id) {
+            try {
+                await apiFetch('/api/pause?task_id=' + encodeURIComponent(id), { method: 'POST' });
+                toast('任务已暂停', 'info');
+                await refreshAll();
+            } catch (e) {
+                toast('暂停失败: ' + e.message, 'error');
+            }
+        }
+
+        async function resumeTask(id) {
+            try {
+                await apiFetch('/api/resume?task_id=' + encodeURIComponent(id), { method: 'POST' });
+                toast('任务已恢复', 'success');
+                await refreshAll();
+            } catch (e) {
+                toast('恢复失败: ' + e.message, 'error');
+            }
         }
 
         async function cancelTask(id) {
@@ -3214,8 +3399,20 @@
                     const tid = String(data.task_id);
                     const t = state.activeTasks.find(x => String(x.task_id) === tid);
                     if (t) {
-                        t.progress = `${(data.progress || 0).toFixed(2)} % (${data.received} / ${data.total})`;
-                        t.status = data.status || 'downloading';
+                        if (data.status === 'paused') {
+                            t.status = 'paused';
+                            t.speed_bps = 0;
+                        } else if (data.status === 'downloading') {
+                            t.status = 'downloading';
+                            if (data.progress != null) {
+                                t.progress = `${(data.progress || 0).toFixed(2)} % (${data.received} / ${data.total})`;
+                            }
+                            if (data.speed_bps != null) t.speed_bps = data.speed_bps;
+                        } else {
+                            t.progress = `${(data.progress || 0).toFixed(2)} % (${data.received} / ${data.total})`;
+                            t.status = data.status || 'downloading';
+                            if (data.speed_bps != null) t.speed_bps = data.speed_bps;
+                        }
                         renderActive();
                     } else {
                         loadActive();
@@ -3490,6 +3687,8 @@
                         }
                     }
                     else if (action === 'cancel') cancelTask(id);
+                    else if (action === 'pause') pauseTask(id);
+                    else if (action === 'resume') resumeTask(id);
                     else if (action === 'retry') retryTask(id);
                     else if (action === 'delete') deleteTask(id, t.dataset.name || '', t.dataset.status || '');
                     else if (action === 'rename') openRename(id, t.dataset.name || '');
