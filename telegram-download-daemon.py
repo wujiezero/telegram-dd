@@ -66,13 +66,28 @@ from telethon.errors import AuthKeyDuplicatedError, SessionPasswordNeededError
 import logging
 from logging.handlers import RotatingFileHandler
 
+def _env_or_none(name, default=None):
+    """把"设了但是空值"的环境变量当成没设。
+
+    docker-compose 用 ``${VAR:-}`` 传递可选项时，未配置的项会以**空字符串**进到
+    容器里，而不是不存在。这对 ``--api-id`` / ``--channel`` / ``--proxy-port``
+    这类 ``type=int`` 的参数是致命的：argparse 会把字符串默认值也套一遍 type
+    转换，``int("")`` 直接让进程起不来，而且报的是 "invalid int value: ''"
+    这种看不出所以然的错。空值当没设，才能正常走到"缺必填项"的提示上。
+    """
+    value = getenv(name)
+    if value is None or not str(value).strip():
+        return default
+    return value
+
+
 LOG_FORMAT = '[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s'
 LOG_LEVEL_NAME = getenv("TELEGRAM_DAEMON_LOG_LEVEL", "INFO").upper()
 LOG_LEVEL = getattr(logging, LOG_LEVEL_NAME, logging.INFO)
 LOG_DIR = getenv("TELEGRAM_DAEMON_LOG_DIR", os.path.join(os.getcwd(), "logs"))
 LOG_FILE = getenv("TELEGRAM_DAEMON_LOG_FILE", "telegram-download-daemon.log")
 LOG_MAX_BYTES = int(getenv("TELEGRAM_DAEMON_LOG_MAX_BYTES", str(5 * 1024 * 1024)))
-LOG_BACKUP_COUNT = int(getenv("TELEGRAM_DAEMON_LOG_BACKUP_COUNT", "5"))
+LOG_BACKUP_COUNT = int(_env_or_none("TELEGRAM_DAEMON_LOG_BACKUP_COUNT", "5"))
 
 root_logger = logging.getLogger()
 root_logger.setLevel(LOG_LEVEL)
@@ -124,50 +139,50 @@ import contextlib
 
 TDD_VERSION="2.0"
 
-TELEGRAM_DAEMON_API_ID = getenv("TELEGRAM_DAEMON_API_ID")
-TELEGRAM_DAEMON_API_HASH = getenv("TELEGRAM_DAEMON_API_HASH")
-TELEGRAM_DAEMON_CHANNEL = getenv("TELEGRAM_DAEMON_CHANNEL")
+TELEGRAM_DAEMON_API_ID = _env_or_none("TELEGRAM_DAEMON_API_ID")
+TELEGRAM_DAEMON_API_HASH = _env_or_none("TELEGRAM_DAEMON_API_HASH")
+TELEGRAM_DAEMON_CHANNEL = _env_or_none("TELEGRAM_DAEMON_CHANNEL")
 
-TELEGRAM_DAEMON_SESSION_PATH = getenv("TELEGRAM_DAEMON_SESSION_PATH")
+TELEGRAM_DAEMON_SESSION_PATH = _env_or_none("TELEGRAM_DAEMON_SESSION_PATH")
 
-TELEGRAM_DAEMON_DEST=getenv("TELEGRAM_DAEMON_DEST", "/telegram-downloads")
-TELEGRAM_DAEMON_TEMP=getenv("TELEGRAM_DAEMON_TEMP", "")
-TELEGRAM_DAEMON_DUPLICATES=getenv("TELEGRAM_DAEMON_DUPLICATES", "rename")
+TELEGRAM_DAEMON_DEST=_env_or_none("TELEGRAM_DAEMON_DEST", "/telegram-downloads")
+TELEGRAM_DAEMON_TEMP=_env_or_none("TELEGRAM_DAEMON_TEMP", "")
+TELEGRAM_DAEMON_DUPLICATES=_env_or_none("TELEGRAM_DAEMON_DUPLICATES", "rename")
 
 TELEGRAM_DAEMON_TEMP_SUFFIX="tdd"
 
-TELEGRAM_DAEMON_WORKERS=getenv("TELEGRAM_DAEMON_WORKERS", multiprocessing.cpu_count())
-TELEGRAM_DAEMON_PROXY_HOST=getenv("TELEGRAM_DAEMON_PROXY_HOST")
-TELEGRAM_DAEMON_PROXY_PORT=getenv("TELEGRAM_DAEMON_PROXY_PORT")
-TELEGRAM_DAEMON_PROXY_TYPE=getenv("TELEGRAM_DAEMON_PROXY_TYPE", "socks5")
-TELEGRAM_DAEMON_PROXY_USERNAME=getenv("TELEGRAM_DAEMON_PROXY_USERNAME")
-TELEGRAM_DAEMON_PROXY_PASSWORD=getenv("TELEGRAM_DAEMON_PROXY_PASSWORD")
-TELEGRAM_DAEMON_PROXY_RESOLVE_ONCE=str(getenv("TELEGRAM_DAEMON_PROXY_RESOLVE_ONCE", "0")).strip().lower() in ("1", "true", "yes", "on")
+TELEGRAM_DAEMON_WORKERS=_env_or_none("TELEGRAM_DAEMON_WORKERS", multiprocessing.cpu_count())
+TELEGRAM_DAEMON_PROXY_HOST=_env_or_none("TELEGRAM_DAEMON_PROXY_HOST")
+TELEGRAM_DAEMON_PROXY_PORT=_env_or_none("TELEGRAM_DAEMON_PROXY_PORT")
+TELEGRAM_DAEMON_PROXY_TYPE=_env_or_none("TELEGRAM_DAEMON_PROXY_TYPE", "socks5")
+TELEGRAM_DAEMON_PROXY_USERNAME=_env_or_none("TELEGRAM_DAEMON_PROXY_USERNAME")
+TELEGRAM_DAEMON_PROXY_PASSWORD=_env_or_none("TELEGRAM_DAEMON_PROXY_PASSWORD")
+TELEGRAM_DAEMON_PROXY_RESOLVE_ONCE=str(_env_or_none("TELEGRAM_DAEMON_PROXY_RESOLVE_ONCE", "0")).strip().lower() in ("1", "true", "yes", "on")
 
 # 可配置参数
 # 下载超时的**保底值**。真正生效的是按文件大小折算出来的值，见 MIN_SPEED_BPS：
 # 一刀切的总时长会把"正常但慢"的大文件误杀，而真正卡死的下载由 NO_PROGRESS_TIMEOUT 兜底。
-TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT=int(getenv("TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT", "3600"))  # 下载超时下限，默认1小时
+TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT=int(_env_or_none("TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT", "3600"))  # 下载超时下限，默认1小时
 # 判定"慢到不值得等"的速度线（字节/秒）。单文件超时 = max(DOWNLOAD_TIMEOUT, 文件大小 / 该速度)。
 # 默认 48KB/s：2GB 的文件因此有约 12 小时额度，而不是被 3600 秒一刀切掉。
-TELEGRAM_DAEMON_MIN_SPEED_BPS=int(getenv("TELEGRAM_DAEMON_MIN_SPEED_BPS", "49152"))
-TELEGRAM_DAEMON_UPDATE_FREQUENCY=int(getenv("TELEGRAM_DAEMON_UPDATE_FREQUENCY", "10"))  # 进度更新频率，默认10秒
-TELEGRAM_DAEMON_START_TIMEOUT=int(getenv("TELEGRAM_DAEMON_START_TIMEOUT", "120"))  # 开始下载超时，默认2分钟
-TELEGRAM_DAEMON_NO_PROGRESS_TIMEOUT=int(getenv("TELEGRAM_DAEMON_NO_PROGRESS_TIMEOUT", "300"))  # 无进度超时，默认5分钟
-TELEGRAM_DAEMON_MAX_RETRIES=int(getenv("TELEGRAM_DAEMON_MAX_RETRIES", "3"))  # 最大重试次数，默认3次
-TELEGRAM_DAEMON_NOTIFY_FAILURE=bool(int(getenv("TELEGRAM_DAEMON_NOTIFY_FAILURE", "1")))  # 失败通知，默认开启
-TELEGRAM_DAEMON_QUEUE_WARN_SECONDS=int(getenv("TELEGRAM_DAEMON_QUEUE_WARN_SECONDS", "120"))
+TELEGRAM_DAEMON_MIN_SPEED_BPS=int(_env_or_none("TELEGRAM_DAEMON_MIN_SPEED_BPS", "49152"))
+TELEGRAM_DAEMON_UPDATE_FREQUENCY=int(_env_or_none("TELEGRAM_DAEMON_UPDATE_FREQUENCY", "10"))  # 进度更新频率，默认10秒
+TELEGRAM_DAEMON_START_TIMEOUT=int(_env_or_none("TELEGRAM_DAEMON_START_TIMEOUT", "120"))  # 开始下载超时，默认2分钟
+TELEGRAM_DAEMON_NO_PROGRESS_TIMEOUT=int(_env_or_none("TELEGRAM_DAEMON_NO_PROGRESS_TIMEOUT", "300"))  # 无进度超时，默认5分钟
+TELEGRAM_DAEMON_MAX_RETRIES=int(_env_or_none("TELEGRAM_DAEMON_MAX_RETRIES", "3"))  # 最大重试次数，默认3次
+TELEGRAM_DAEMON_NOTIFY_FAILURE=bool(int(_env_or_none("TELEGRAM_DAEMON_NOTIFY_FAILURE", "1")))  # 失败通知，默认开启
+TELEGRAM_DAEMON_QUEUE_WARN_SECONDS=int(_env_or_none("TELEGRAM_DAEMON_QUEUE_WARN_SECONDS", "120"))
 # 单文件并行下载连接数：>1 时对足够大的文件启用多连接并行分块下载。
 # Telegram 的下载限速按连接计，单连接（=1）就是天花板，非 Premium 账号尤其明显。
 # 默认 4：明显提速且不容易触发 flood-wait；网络好可以往上调到 8。
-TELEGRAM_DAEMON_PARALLEL_CONNECTIONS=int(getenv("TELEGRAM_DAEMON_PARALLEL_CONNECTIONS", "4"))
+TELEGRAM_DAEMON_PARALLEL_CONNECTIONS=int(_env_or_none("TELEGRAM_DAEMON_PARALLEL_CONNECTIONS", "4"))
 # 只有体积 >= 该阈值（MB）的文件才走并行下载；小文件并行收益低且更易触发限流。默认 10MB。
-TELEGRAM_DAEMON_PARALLEL_MIN_SIZE_MB=int(getenv("TELEGRAM_DAEMON_PARALLEL_MIN_SIZE_MB", "10"))
+TELEGRAM_DAEMON_PARALLEL_MIN_SIZE_MB=int(_env_or_none("TELEGRAM_DAEMON_PARALLEL_MIN_SIZE_MB", "10"))
 # 断点续传：下载超时 / 出错时保留 .tdd 临时文件，重试时从已下载的字节数接着下。
 # 关掉的话行为回到老样子（每次重试都从 0 开始）。
-TELEGRAM_DAEMON_RESUME=str(getenv("TELEGRAM_DAEMON_RESUME", "1")).strip().lower() in ("1", "true", "yes", "on")
+TELEGRAM_DAEMON_RESUME=str(_env_or_none("TELEGRAM_DAEMON_RESUME", "1")).strip().lower() in ("1", "true", "yes", "on")
 # 残留临时文件的保留时长（小时）。续传要靠这些文件，所以比原先的 24 小时放宽。
-TELEGRAM_DAEMON_TEMP_MAX_AGE_HOURS=int(getenv("TELEGRAM_DAEMON_TEMP_MAX_AGE_HOURS", "72"))
+TELEGRAM_DAEMON_TEMP_MAX_AGE_HOURS=int(_env_or_none("TELEGRAM_DAEMON_TEMP_MAX_AGE_HOURS", "72"))
 
 
 def _env_flag(name, default="0"):
@@ -188,7 +203,7 @@ TELEGRAM_DAEMON_LINK_ALBUM=_env_flag("TELEGRAM_DAEMON_LINK_ALBUM", "1")
 # 默认关闭：这是会改变账号状态的动作，需要显式开启。
 TELEGRAM_DAEMON_LINK_AUTO_JOIN=_env_flag("TELEGRAM_DAEMON_LINK_AUTO_JOIN", "0")
 # 单条消息里所有链接合计最多展开多少条 Telegram 消息，防止 a-b 区间链接把队列打爆
-TELEGRAM_DAEMON_LINK_MAX_MESSAGES=int(getenv("TELEGRAM_DAEMON_LINK_MAX_MESSAGES", "50"))
+TELEGRAM_DAEMON_LINK_MAX_MESSAGES=int(_env_or_none("TELEGRAM_DAEMON_LINK_MAX_MESSAGES", "50"))
 
 parser = argparse.ArgumentParser(
     description="Script to download files from a Telegram Channel.")

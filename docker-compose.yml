@@ -4,29 +4,40 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: telegram-download
+    # 约定：**所有可调项一律走 .env**（`${VAR:-默认值}`），这里不再写死任何数值。
+    # 写死过一次的教训：.env 里明明写着 PARALLEL_CONNECTIONS=4，容器却一直跑在 1，
+    # 因为 compose 的字面值覆盖了它，改了半天 .env 完全不起作用。
+    # 容器内固定的路径类变量除外（DEST / SESSION_PATH，它们对应下面的挂载点）。
     environment:
       - TELEGRAM_DAEMON_API_ID=${TELEGRAM_DAEMON_API_ID}
       - TELEGRAM_DAEMON_API_HASH=${TELEGRAM_DAEMON_API_HASH}
       - TELEGRAM_DAEMON_CHANNEL=${TELEGRAM_DAEMON_CHANNEL}
       - TELEGRAM_DAEMON_DEST=/downloads
       - TELEGRAM_DAEMON_SESSION_PATH=/session
-      # 某些 NAS/面板的 bind mount 目录可读但不可创建锁文件；遇到权限问题时可打开这一项。
-      #- TELEGRAM_DAEMON_LOCK_FILE=/tmp/DownloadDaemon.lock
+      # 某些 NAS/面板的 bind mount 目录可读但不可创建锁文件；遇到权限问题时在 .env 里设。
+      - TELEGRAM_DAEMON_LOCK_FILE=${TELEGRAM_DAEMON_LOCK_FILE:-}
       # 注意：多个 worker 并不会带来成倍的总带宽——Telegram 按连接限速，而分块下载
       # 的连接数（下面那项）才是真正的提速手段。worker 数只决定"同时处理几个文件"。
-      - TELEGRAM_DAEMON_WORKERS=2
+      - TELEGRAM_DAEMON_WORKERS=${TELEGRAM_DAEMON_WORKERS:-2}
+      - TELEGRAM_DAEMON_DUPLICATES=${TELEGRAM_DAEMON_DUPLICATES:-rename}
       # 单文件多连接并行分块下载的连接数。Telegram 的下载限速按连接计，=1 就是天花板，
       # 非 Premium 账号尤其明显。4 是稳妥的默认值，网络好可以调到 8（过多易触发 flood-wait）。
-      - TELEGRAM_DAEMON_PARALLEL_CONNECTIONS=4
+      # 总连接数 ≈ 该值 × WORKERS，一起看别超。
+      - TELEGRAM_DAEMON_PARALLEL_CONNECTIONS=${TELEGRAM_DAEMON_PARALLEL_CONNECTIONS:-4}
       # 仅体积 >= 此值（MB）的文件走并行下载，小文件并行收益低。
-      - TELEGRAM_DAEMON_PARALLEL_MIN_SIZE_MB=10
+      - TELEGRAM_DAEMON_PARALLEL_MIN_SIZE_MB=${TELEGRAM_DAEMON_PARALLEL_MIN_SIZE_MB:-10}
       # 断点续传：下载超时/出错时保留 .tdd 半成品，重试从断点接着下而不是从 0 重来。
-      - TELEGRAM_DAEMON_RESUME=1
+      - TELEGRAM_DAEMON_RESUME=${TELEGRAM_DAEMON_RESUME:-1}
+      - TELEGRAM_DAEMON_TEMP_MAX_AGE_HOURS=${TELEGRAM_DAEMON_TEMP_MAX_AGE_HOURS:-72}
       # 单文件总超时 = max(DOWNLOAD_TIMEOUT, 文件大小 / MIN_SPEED_BPS)。
       # 一刀切的 3600 秒会把"正常但慢"的大文件误杀；真正卡死的下载由
       # NO_PROGRESS_TIMEOUT（默认 300 秒没有任何字节进来就砍）负责。
-      - TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT=3600
-      - TELEGRAM_DAEMON_MIN_SPEED_BPS=49152
+      - TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT=${TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT:-3600}
+      - TELEGRAM_DAEMON_MIN_SPEED_BPS=${TELEGRAM_DAEMON_MIN_SPEED_BPS:-49152}
+      - TELEGRAM_DAEMON_NO_PROGRESS_TIMEOUT=${TELEGRAM_DAEMON_NO_PROGRESS_TIMEOUT:-300}
+      - TELEGRAM_DAEMON_START_TIMEOUT=${TELEGRAM_DAEMON_START_TIMEOUT:-120}
+      - TELEGRAM_DAEMON_MAX_RETRIES=${TELEGRAM_DAEMON_MAX_RETRIES:-3}
+      - TELEGRAM_DAEMON_NOTIFY_FAILURE=${TELEGRAM_DAEMON_NOTIFY_FAILURE:-1}
       # 监听频道里出现的 t.me 消息链接（含私密频道 t.me/c/<id>/<msg>），自动抓取并下载。
       # 前提是登录账号本身在那个私密频道里。
       - TELEGRAM_DAEMON_LINK_DOWNLOAD=${TELEGRAM_DAEMON_LINK_DOWNLOAD:-1}
@@ -34,18 +45,17 @@ services:
       # 自动加入未加入的邀请链接频道；改变账号状态，默认关闭。
       - TELEGRAM_DAEMON_LINK_AUTO_JOIN=${TELEGRAM_DAEMON_LINK_AUTO_JOIN:-0}
       - TELEGRAM_DAEMON_LINK_MAX_MESSAGES=${TELEGRAM_DAEMON_LINK_MAX_MESSAGES:-50}
-      - TELEGRAM_DAEMON_PROXY_RESOLVE_ONCE=1
       # 开启 Web UI 鉴权；留空则为开放访问（老行为）
       - TELEGRAM_DAEMON_WEB_TOKEN=${TELEGRAM_DAEMON_WEB_TOKEN:-}
       # 如果通过 HTTPS 反代再暴露，可以把 cookie 的 Secure 打开
-      - TELEGRAM_DAEMON_WEB_COOKIE_SECURE=0
-      # Proxy configuration (uncomment and modify if needed)
-      #- TELEGRAM_DAEMON_PROXY_HOST=x.x.x.x
-      #- TELEGRAM_DAEMON_PROXY_PORT=7890
-      #- TELEGRAM_DAEMON_PROXY_TYPE=socks5
-      # Proxy authentication (uncomment and modify if needed)
-      #- TELEGRAM_DAEMON_PROXY_USERNAME=your_username
-      #- TELEGRAM_DAEMON_PROXY_PASSWORD=your_password
+      - TELEGRAM_DAEMON_WEB_COOKIE_SECURE=${TELEGRAM_DAEMON_WEB_COOKIE_SECURE:-0}
+      # 代理：在 .env 里填 PROXY_HOST/PORT 即启用，留空则直连
+      - TELEGRAM_DAEMON_PROXY_HOST=${TELEGRAM_DAEMON_PROXY_HOST:-}
+      - TELEGRAM_DAEMON_PROXY_PORT=${TELEGRAM_DAEMON_PROXY_PORT:-}
+      - TELEGRAM_DAEMON_PROXY_TYPE=${TELEGRAM_DAEMON_PROXY_TYPE:-socks5}
+      - TELEGRAM_DAEMON_PROXY_USERNAME=${TELEGRAM_DAEMON_PROXY_USERNAME:-}
+      - TELEGRAM_DAEMON_PROXY_PASSWORD=${TELEGRAM_DAEMON_PROXY_PASSWORD:-}
+      - TELEGRAM_DAEMON_PROXY_RESOLVE_ONCE=${TELEGRAM_DAEMON_PROXY_RESOLVE_ONCE:-1}
     ports:
       - 7373:7373
     # 容器以 root 运行（见 Dockerfile）——宿主目录不需要做 chown。
