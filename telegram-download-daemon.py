@@ -42,7 +42,12 @@ from tdd_utils import (
     normalize_pagination,
     sanitize_filename,
 )
-from fast_download import download_file as fast_download_file, get_parallel_location
+from fast_download import (
+    align_down,
+    choose_part_size,
+    download_file as fast_download_file,
+    get_parallel_location,
+)
 from tg_links import parse_telegram_links, utf16_slice
 
 from telethon import TelegramClient, events, __version__
@@ -140,7 +145,12 @@ TELEGRAM_DAEMON_PROXY_PASSWORD=getenv("TELEGRAM_DAEMON_PROXY_PASSWORD")
 TELEGRAM_DAEMON_PROXY_RESOLVE_ONCE=str(getenv("TELEGRAM_DAEMON_PROXY_RESOLVE_ONCE", "0")).strip().lower() in ("1", "true", "yes", "on")
 
 # 可配置参数
-TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT=int(getenv("TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT", "3600"))  # 下载超时，默认1小时
+# 下载超时的**保底值**。真正生效的是按文件大小折算出来的值，见 MIN_SPEED_BPS：
+# 一刀切的总时长会把"正常但慢"的大文件误杀，而真正卡死的下载由 NO_PROGRESS_TIMEOUT 兜底。
+TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT=int(getenv("TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT", "3600"))  # 下载超时下限，默认1小时
+# 判定"慢到不值得等"的速度线（字节/秒）。单文件超时 = max(DOWNLOAD_TIMEOUT, 文件大小 / 该速度)。
+# 默认 48KB/s：2GB 的文件因此有约 12 小时额度，而不是被 3600 秒一刀切掉。
+TELEGRAM_DAEMON_MIN_SPEED_BPS=int(getenv("TELEGRAM_DAEMON_MIN_SPEED_BPS", "49152"))
 TELEGRAM_DAEMON_UPDATE_FREQUENCY=int(getenv("TELEGRAM_DAEMON_UPDATE_FREQUENCY", "10"))  # 进度更新频率，默认10秒
 TELEGRAM_DAEMON_START_TIMEOUT=int(getenv("TELEGRAM_DAEMON_START_TIMEOUT", "120"))  # 开始下载超时，默认2分钟
 TELEGRAM_DAEMON_NO_PROGRESS_TIMEOUT=int(getenv("TELEGRAM_DAEMON_NO_PROGRESS_TIMEOUT", "300"))  # 无进度超时，默认5分钟
@@ -148,12 +158,16 @@ TELEGRAM_DAEMON_MAX_RETRIES=int(getenv("TELEGRAM_DAEMON_MAX_RETRIES", "3"))  # �
 TELEGRAM_DAEMON_NOTIFY_FAILURE=bool(int(getenv("TELEGRAM_DAEMON_NOTIFY_FAILURE", "1")))  # 失败通知，默认开启
 TELEGRAM_DAEMON_QUEUE_WARN_SECONDS=int(getenv("TELEGRAM_DAEMON_QUEUE_WARN_SECONDS", "120"))
 # 单文件并行下载连接数：>1 时对足够大的文件启用多连接并行分块下载。
-# 注意：当文件不在会话所在 DC（跨 DC）时，导出授权 + 多连接拉同一文件会被 Telegram
-# 重度限流，实测反而比原生串行下载慢得多，故默认设为 1（走 Telethon 原生下载，最稳最快）。
-# 仅在确认能提速的环境下再调到 2~8 试验（连接数过多易触发 flood-wait）。
-TELEGRAM_DAEMON_PARALLEL_CONNECTIONS=int(getenv("TELEGRAM_DAEMON_PARALLEL_CONNECTIONS", "1"))
+# Telegram 的下载限速按连接计，单连接（=1）就是天花板，非 Premium 账号尤其明显。
+# 默认 4：明显提速且不容易触发 flood-wait；网络好可以往上调到 8。
+TELEGRAM_DAEMON_PARALLEL_CONNECTIONS=int(getenv("TELEGRAM_DAEMON_PARALLEL_CONNECTIONS", "4"))
 # 只有体积 >= 该阈值（MB）的文件才走并行下载；小文件并行收益低且更易触发限流。默认 10MB。
 TELEGRAM_DAEMON_PARALLEL_MIN_SIZE_MB=int(getenv("TELEGRAM_DAEMON_PARALLEL_MIN_SIZE_MB", "10"))
+# 断点续传：下载超时 / 出错时保留 .tdd 临时文件，重试时从已下载的字节数接着下。
+# 关掉的话行为回到老样子（每次重试都从 0 开始）。
+TELEGRAM_DAEMON_RESUME=str(getenv("TELEGRAM_DAEMON_RESUME", "1")).strip().lower() in ("1", "true", "yes", "on")
+# 残留临时文件的保留时长（小时）。续传要靠这些文件，所以比原先的 24 小时放宽。
+TELEGRAM_DAEMON_TEMP_MAX_AGE_HOURS=int(getenv("TELEGRAM_DAEMON_TEMP_MAX_AGE_HOURS", "72"))
 
 
 def _env_flag(name, default="0"):
@@ -380,6 +394,9 @@ parallel_connections = max(1, int(args.parallel_connections))
 parallel_min_size_bytes = max(0, int(args.parallel_min_size_mb)) * 1024 * 1024
 updateFrequency = TELEGRAM_DAEMON_UPDATE_FREQUENCY
 download_timeout = TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT
+min_speed_bps = max(1, TELEGRAM_DAEMON_MIN_SPEED_BPS)
+resume_enabled = TELEGRAM_DAEMON_RESUME
+temp_max_age_seconds = max(1, TELEGRAM_DAEMON_TEMP_MAX_AGE_HOURS) * 3600
 start_timeout = TELEGRAM_DAEMON_START_TIMEOUT
 no_progress_timeout = TELEGRAM_DAEMON_NO_PROGRESS_TIMEOUT
 max_retries = TELEGRAM_DAEMON_MAX_RETRIES
@@ -525,6 +542,14 @@ try:
     except sqlite3.OperationalError:
         pass
 
+    # 断点续传：记住这条下载正在写哪个 .tdd 临时文件。重试时据此判断"这个残留文件
+    # 是我自己的半成品"，从而接着下，而不是当成重名文件改名后从 0 重来。
+    try:
+        cursor.execute("ALTER TABLE downloads ADD COLUMN temp_path TEXT")
+        logger.info("Added temp_path column to downloads table")
+    except sqlite3.OperationalError:
+        pass
+
     for idx_sql, idx_desc in [
         ("CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status)", "status"),
         ("CREATE INDEX IF NOT EXISTS idx_downloads_file_type ON downloads(file_type)", "file_type"),
@@ -575,13 +600,16 @@ def db_execute_many(query, params_list):
         local_conn.close()
 
 def cleanup_temp_files():
-    """清理残留的临时文件"""
+    """清理残留的临时文件。
+
+    开启断点续传后 .tdd 文件是**有价值的**（重试要靠它接着下），所以只清理确实
+    放了很久、不会再有人来续的那些，保留时长由 TELEGRAM_DAEMON_TEMP_MAX_AGE_HOURS 控制。
+    """
     try:
         temp_files = glob.glob(os.path.join(tempFolder, f"*.{TELEGRAM_DAEMON_TEMP_SUFFIX}"))
         for temp_file in temp_files:
-            # 检查文件是否超过24小时（可能是残留文件）
             file_age = time.time() - os.path.getmtime(temp_file)
-            if file_age > 86400:  # 24小时
+            if file_age > temp_max_age_seconds:
                 os.remove(temp_file)
                 logger.info(f"Cleaned up stale temp file: {temp_file}")
     except Exception as e:
@@ -1873,7 +1901,10 @@ async def log_premium_status(client: TelegramClient) -> None:
             parallel_connections, parallel_min_size_bytes // (1024 * 1024),
         )
     else:
-        logger.info("Parallel download disabled (TELEGRAM_DAEMON_PARALLEL_CONNECTIONS=1); using serial download.")
+        logger.info(
+            "Parallel download disabled (TELEGRAM_DAEMON_PARALLEL_CONNECTIONS=1); using a single "
+            "connection per file. Telegram throttles per connection, so raising this is the main "
+            "lever on download speed.")
 
 
 async def sendHelloMessage(client: TelegramClient, peerChannel: PeerChannel) -> None:
@@ -1928,36 +1959,103 @@ async def log_reply(message: events.NewMessage.Event, reply: str) -> None:
         await message.edit(reply)
 
 
-async def download_media_dispatch(message_obj, temp_path, progress_callback):
-    """根据配置选择并行分块下载或 Telethon 默认下载。
+def compute_download_timeout(size):
+    """单文件的总超时。
 
-    当 ``parallel_connections > 1`` 且文件是足够大的 Document 时，使用多连接并行
-    分块下载（吃满 Premium 高速档）；否则（或并行失败时）回退到默认串行下载，
-    行为与原先的 ``client.download_media`` 完全一致。
+    一刀切的 3600 秒会把"正常但慢"的大文件误杀——文件越大越必然超时，而重试又
+    从 0 开始，于是永远下不完。这里改成按体积折算：给每个文件至少
+    ``size / min_speed_bps`` 的时间，并以 ``download_timeout`` 为下限。
+
+    真正卡死的下载不靠这个判定，由 ``no_progress_timeout``（默认 5 分钟没有任何
+    字节进来就砍）负责，那才是"卡住"的正确判据。
     """
-    if parallel_connections > 1:
-        document = get_parallel_location(message_obj)
-        if document is not None and int(getattr(document, "size", 0)) >= parallel_min_size_bytes:
-            try:
-                with open(temp_path, "wb") as out:
+    try:
+        size = int(size or 0)
+    except (TypeError, ValueError):
+        size = 0
+    if size <= 0:
+        return download_timeout
+    return max(download_timeout, math.ceil(size / min_speed_bps))
+
+
+def resumable_offset(temp_path, size, part_size_hint=None):
+    """已下载的字节数中可以安全续传的那部分（向下对齐到分块边界）。
+
+    Telegram 只接受对齐到分块大小的 offset，所以把尾巴上不足一块的部分丢掉重下。
+    返回 0 表示没有可用的断点，应当从头下载。
+    """
+    if not resume_enabled or not temp_path or not os.path.exists(temp_path):
+        return 0
+    try:
+        downloaded = os.path.getsize(temp_path)
+    except OSError:
+        return 0
+    try:
+        size = int(size or 0)
+    except (TypeError, ValueError):
+        size = 0
+    # 大小不明或者临时文件比目标还大（元信息对不上）时不冒险续传。
+    if size <= 0 or downloaded <= 0 or downloaded >= size:
+        return 0
+    part_size = part_size_hint or choose_part_size(size)
+    return align_down(downloaded, part_size)
+
+
+async def download_media_dispatch(message_obj, temp_path, progress_callback,
+                                  resume_from=0, refresh_document=None):
+    """下载媒体到 ``temp_path``，可选地从 ``resume_from`` 字节处续传。
+
+    Document 类的媒体走本项目自己的分块下载器（``fast_download``）：它支持任意
+    起始偏移量，而且能开多连接——Telegram 的下载限速按连接计，单连接就是天花板。
+    连接数为 1 时它同样能跑，只是退化成单连接，好处是仍然支持续传，并且用的是本次
+    下载专属的连接，而不是和其它 worker 抢 Telethon 那条共享的主连接。
+
+    照片、缩略图等非 Document 媒体，以及并行路径出错时，回退到 ``client.download_media``。
+    该函数不支持续传，回退时会把半成品清掉从头下。
+    """
+    document = get_parallel_location(message_obj)
+    document_size = int(getattr(document, "size", 0)) if document is not None else 0
+    # 续传只有分块下载器做得到，所以一旦有断点就无条件走它，不看体积阈值。
+    use_chunked = document is not None and (
+        resume_from > 0
+        or (parallel_connections > 1 and document_size >= parallel_min_size_bytes)
+    )
+
+    if use_chunked:
+        try:
+            if resume_from > 0:
+                # 'r+b' + seek + truncate：把不足一整块的尾巴切掉，从对齐的位置续写。
+                with open(temp_path, "r+b") as out:
+                    out.seek(resume_from)
+                    out.truncate()
                     await fast_download_file(
-                        client,
-                        document,
-                        out,
+                        client, document, out,
                         progress_callback=progress_callback,
                         connection_count=parallel_connections,
+                        start_offset=resume_from,
+                        refresh_document=refresh_document,
                     )
-                return temp_path
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.warning(
-                    "Parallel download failed (%s); falling back to serial download for %s",
-                    exc, temp_path,
-                )
-                with contextlib.suppress(Exception):
-                    if os.path.exists(temp_path):
-                        os.remove(temp_path)
+            else:
+                with open(temp_path, "wb") as out:
+                    await fast_download_file(
+                        client, document, out,
+                        progress_callback=progress_callback,
+                        connection_count=parallel_connections,
+                        refresh_document=refresh_document,
+                    )
+            return temp_path
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Chunked download failed (%s); falling back to the native downloader for %s",
+                exc, temp_path,
+            )
+            # 原生下载器不支持续传，半成品留着只会被当成完整文件，必须清掉。
+            with contextlib.suppress(Exception):
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+
     return await client.download_media(
         message_obj, temp_path, progress_callback=progress_callback)
 
@@ -2093,7 +2191,8 @@ try:
     logger.info(f"API ID: {api_id}, Channel ID: {channel_id}")
     logger.info(f"Download folder: {downloadFolder}, Temp folder: {tempFolder}")
     logger.info(f"Worker count: {worker_count}")
-    logger.info(f"Download timeout: {download_timeout}s, Start timeout: {start_timeout}s, Update frequency: {updateFrequency}s, Max retries: {max_retries}, Notify failure: {notify_failure}")
+    logger.info(f"Download timeout: >= {download_timeout}s, scaled by size at {min_speed_bps} B/s (e.g. 2GB -> {compute_download_timeout(2 * 1024**3)}s), Start timeout: {start_timeout}s, No-progress timeout: {no_progress_timeout}s, Update frequency: {updateFrequency}s, Max retries: {max_retries}, Notify failure: {notify_failure}")
+    logger.info(f"Resume partial downloads: {'on' if resume_enabled else 'off'} (temp files kept for {temp_max_age_seconds // 3600}h)")
     logger.info(
         "Message link download: %s (album=%s, auto-join=%s, max messages per text=%s)",
         "enabled" if link_download_enabled else "disabled",
@@ -2470,7 +2569,10 @@ try:
             filename = getFilename(message_obj)
             temp_path = build_safe_path(tempFolder, f"{filename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}")
             root_path = build_safe_path(downloadFolder, filename)
-            if path.exists(temp_path) and duplicates == "ignore":
+            # 重投一条已有记录（Web 上点重试、重启恢复）时，那个 .tdd 很可能就是它自己
+            # 上次没下完的半成品，不能当成"已存在"给忽略掉——那正是要接着下的东西。
+            retrying_existing = resume_enabled and existing_download_id is not None
+            if path.exists(temp_path) and duplicates == "ignore" and not retrying_existing:
                 status_message = None if silent else await notify_about_message(
                     message_obj, "{0} already exists. Ignoring it.".format(filename), reply_target
                 )
@@ -2726,7 +2828,10 @@ try:
             restored = 0
             for download_id, source_channel_id, source_message_id, target_dir, previous_status, previous_filename in pending_rows:
                 try:
-                    cleanup_temp_file_for_filename(previous_filename)
+                    # 开了断点续传就保留半成品：重启前下到一半的那些字节，重新入队后
+                    # 会被 worker 认出来接着下（靠 downloads.temp_path 认领）。
+                    if not resume_enabled:
+                        cleanup_temp_file_for_filename(previous_filename)
                     message_obj = await client.get_messages(PeerChannel(source_channel_id), ids=source_message_id)
                     if not message_obj:
                         async with db_lock:
@@ -3114,6 +3219,9 @@ try:
                 filename = "unknown"
                 worker_queue = None
                 queue_items_list = None
+                # 续传相关状态：失败处理里要用，所以在 try 之前先给个确定的初值
+                temp_path = None
+                resume_from = 0
                 try:
                     element, worker_queue, queue_items_list, queue_type = await pop_next_queue_item()
                     message_obj=element[0]
@@ -3168,11 +3276,44 @@ try:
                     else: 
                        logger.info(f"Processing document: {filename}, Size: {size} bytes")
 
+                    # 断点续传：这条记录上次写到哪个临时文件？如果那个半成品还在，
+                    # 说明是自己上次没下完的东西，可以接着下——而不是当成"重名文件"
+                    # 改名后从 0 重来（那正是老逻辑里大文件永远下不完的原因之一）。
+                    own_partial_path = None
+                    if resume_enabled and download_id is not None:
+                        async with db_lock:
+                            cursor.execute(
+                                'SELECT temp_path FROM downloads WHERE id = ?', (download_id,))
+                            partial_row = cursor.fetchone()
+                        recorded_temp = partial_row[0] if partial_row else None
+                        if recorded_temp and os.path.exists(recorded_temp):
+                            try:
+                                # 记录里的路径必须仍落在临时目录内，避免脏数据把文件写到别处
+                                own_partial_path = ensure_existing_path_within(tempFolder, recorded_temp)
+                            except (ValueError, OSError):
+                                logger.warning(
+                                    "Ignoring out-of-tree temp_path for id=%s: %s",
+                                    download_id, recorded_temp)
+                        if own_partial_path:
+                            # 沿用上次那个文件名，否则临时文件名对不上，就找不到自己的半成品了
+                            suffix = f".{TELEGRAM_DAEMON_TEMP_SUFFIX}"
+                            recorded_name = os.path.basename(own_partial_path)
+                            if recorded_name.endswith(suffix):
+                                filename = recorded_name[: -len(suffix)]
+                            else:
+                                own_partial_path = None
+
                     # Check for duplicates in the category folder
                     in_progress_temp_path = build_safe_path(tempFolder, f"{filename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}")
                     final_duplicate_path = build_safe_path(category_folder, filename)
-                    if path.exists(in_progress_temp_path) or path.exists(final_duplicate_path):
-                        should_rename_for_size_mismatch = path.exists(in_progress_temp_path)
+                    # 自己的半成品不算"撞名的在途下载"，否则每次重试都会改名重下。
+                    own_partial_here = (
+                        own_partial_path is not None
+                        and os.path.abspath(own_partial_path) == os.path.abspath(in_progress_temp_path)
+                    )
+                    foreign_temp_exists = path.exists(in_progress_temp_path) and not own_partial_here
+                    if foreign_temp_exists or path.exists(final_duplicate_path):
+                        should_rename_for_size_mismatch = foreign_temp_exists
                         should_rename_for_unknown_size = False
                         if path.exists(final_duplicate_path) and size > 0:
                             try:
@@ -3209,6 +3350,32 @@ try:
                            worker_queue.task_done()
                            continue
 
+                    # 上面任何一条改名分支都会让文件名变掉，半成品也就对不上了：放弃续传，从头下。
+                    temp_path = build_safe_path(tempFolder, f"{filename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}")
+                    if own_partial_path and os.path.abspath(own_partial_path) != os.path.abspath(temp_path):
+                        logger.info(
+                            "Discarding resume point for id=%s: target file was renamed to %s",
+                            download_id, filename)
+                        # 改了名之后那份半成品再也没人会来续，顺手删掉别留垃圾
+                        with contextlib.suppress(OSError):
+                            os.remove(own_partial_path)
+                        own_partial_path = None
+
+                    resume_from = resumable_offset(own_partial_path, size) if own_partial_path else 0
+                    if resume_from > 0:
+                        logger.info(
+                            "Resuming download id=%s from %d/%d bytes (%.1f%%): %s",
+                            download_id, resume_from, size,
+                            resume_from / size * 100 if size else 0.0, filename)
+                    elif own_partial_path:
+                        # 半成品存在但不可用（大小对不上/不足一个分块），清掉重下。
+                        with contextlib.suppress(Exception):
+                            os.remove(own_partial_path)
+
+                    # 续传时进度条从断点起算，别让页面上的百分比倒退回 0。
+                    initial_progress = (resume_from / size * 100) if (size and resume_from) else 0.0
+                    effective_timeout = compute_download_timeout(size)
+
                     # Update queued record into downloading state
                     download_path = build_safe_path(category_folder, filename)
                     source_channel = get_source_channel_id(message_obj)
@@ -3220,13 +3387,14 @@ try:
                                 '''
                                 INSERT INTO downloads (
                                     filename, file_type, status, size, progress, download_path,
-                                    source_channel_id, source_message_id, source_message_link, target_dir
+                                    source_channel_id, source_message_id, source_message_link, target_dir,
+                                    temp_path
                                 )
-                                VALUES (?, ?, 'downloading', ?, 0.0, ?, ?, ?, ?, ?)
+                                VALUES (?, ?, 'downloading', ?, ?, ?, ?, ?, ?, ?, ?)
                                 ''',
                                 (
-                                    filename, file_category, size, download_path, source_channel,
-                                    source_message_id, source_message_link, target_dir_override
+                                    filename, file_category, size, initial_progress, download_path, source_channel,
+                                    source_message_id, source_message_link, target_dir_override, temp_path
                                 )
                             )
                             download_id = cursor.lastrowid
@@ -3236,14 +3404,15 @@ try:
                             cursor.execute(
                                 '''
                                 UPDATE downloads
-                                SET filename = ?, file_type = ?, status = 'downloading', size = ?, progress = 0.0,
+                                SET filename = ?, file_type = ?, status = 'downloading', size = ?, progress = ?,
                                     download_path = ?, source_channel_id = ?, source_message_id = ?,
-                                    source_message_link = ?, target_dir = ?, end_time = NULL
+                                    source_message_link = ?, target_dir = ?, temp_path = ?, end_time = NULL
                                 WHERE id = ?
                                 ''',
                                 (
-                                    filename, file_category, size, download_path, source_channel,
-                                    source_message_id, source_message_link, target_dir_override, download_id
+                                    filename, file_category, size, initial_progress, download_path, source_channel,
+                                    source_message_id, source_message_link, target_dir_override, temp_path,
+                                    download_id
                                 )
                             )
                         conn.commit()
@@ -3254,34 +3423,37 @@ try:
                         "Downloading file {0} ({1} bytes) to {2}".format(filename, size, file_category)
                     )
 
-                    # 进度回调函数不能是异步的，所以我们需要使用一个同步的包装器。
-                    # 为了避免每个 tick 都写 SQLite + 广播 WS，我们按 **进度变化 >= 1% 或距上次
-                    # 更新 >= 2s** 的节流策略做事。仅当真正推进时才触发 DB 写、WS 广播、Telegram 回复。
+                    # 进度回调是 **async** 的：Telethon 和本项目的分块下载器都会 await 可等待的
+                    # 回调返回值。这一点对暂停很关键——早先用 threading.Event.wait() 同步阻塞，
+                    # 会把整个 event loop 冻住，连超时看门狗自己都跑不了，暂停时长于是被算进
+                    # 总耗时，恢复后往往立刻被判超时。改成 asyncio.sleep 后 loop 照常运转。
+                    #
+                    # 为了避免每个 tick 都写 SQLite + 广播 WS，按 **进度变化 >= 1% 或距上次更新
+                    # >= 2s** 的节流策略做事。仅当真正推进时才触发 DB 写、WS 广播、Telegram 回复。
                     last_progress_time = [time.time()]
                     # 速度按“固定时间窗口”统计，而不是相邻两次回调之差：并行分块下载时回调会
                     # 在一个网络往返内突发触发多次（间隔≈0），用瞬时差会把速度放大几十上百倍。
                     # 只有距上次采样 >= SPEED_SAMPLE_INTERVAL 才重算速度，否则沿用上次结果。
-                    last_speed_snapshot = [{'received': 0, 'timestamp': time.time(), 'speed_bps': 0.0}]
+                    last_speed_snapshot = [{'received': resume_from, 'timestamp': time.time(), 'speed_bps': 0.0}]
                     SPEED_SAMPLE_INTERVAL = 0.5  # seconds
                     # 节流快照：[上次写库/广播的 percentage, 上次写库/广播的时间戳]
                     last_persisted = [-1.0, 0.0]
                     PROGRESS_MIN_DELTA = 1.0   # %
                     PROGRESS_MIN_INTERVAL = 2.0  # seconds
-                    def download_callback(received, total):
-                        # 由于回调是同步的，我们不能直接await异步函数
-                        # 但我们可以记录进度，然后在合适的时候更新
+                    async def download_callback(received, total):
                         nonlocal lastUpdate
 
                         # === 暂停支持 ===
-                        # 如果任务被暂停，阻塞在此直到恢复或取消
+                        # 任务被暂停时停在这里，直到恢复或被取消。
                         pause_evt = paused_download_ids.get(str(download_id))
                         if pause_evt is not None and not pause_evt.is_set():
                             logger.info(f"Download paused: {filename} (id={download_id})")
-                            while not pause_evt.wait(timeout=0.5):
-                                # 每 0.5s 检查一次：如果下载任务已被取消则退出
+                            while not pause_evt.is_set():
+                                # 每 0.5s 醒一次：如果下载任务已被取消就别再等了
                                 if download_task is not None and download_task.done():
                                     logger.info(f"Paused download was cancelled: {filename}")
                                     return
+                                await asyncio.sleep(0.5)
                             logger.info(f"Download resumed: {filename} (id={download_id})")
 
                         # total 可能在媒体元信息缺失时为 0；避免除零异常
@@ -3368,23 +3540,39 @@ try:
                         if received > 0 and total and received < total * 0.01:
                             emit_status_update()
 
-                    # 添加超时处理，防止下载卡住
-                    # 使用两层超时：开始超时 + 总下载超时
+                    # 三层超时：开始超时（连不上/取不到）、无进度超时（真卡死）、
+                    # 总超时（按体积折算，见 compute_download_timeout）。
                     download_started = [False]  # 使用列表让闭包能修改
-                    
-                    def check_start_callback(received, total):
+
+                    async def check_start_callback(received, total):
                         if received > 0:
                             download_started[0] = True
-                        download_callback(received, total)
-                    
+                        await download_callback(received, total)
+
+                    async def refresh_source_document():
+                        """file_reference 过期时重新取回消息，换一份新的 document。
+
+                        大文件下载可能跨几个小时，而 file_reference 的有效期比这短，
+                        不刷新的话下到一半就会 FILE_REFERENCE_EXPIRED。
+                        """
+                        if source_channel is None or source_message_id is None:
+                            return None
+                        fresh = await client.get_messages(
+                            PeerChannel(source_channel), ids=source_message_id)
+                        if fresh is None:
+                            return None
+                        return get_parallel_location(fresh)
+
                     download_task = None
                     try:
-                        # 创建下载任务（并行分块下载，自动回退到默认串行下载）
+                        # 创建下载任务（分块下载，出错时自动回退到 Telethon 原生下载）
                         download_task = asyncio.create_task(
                             download_media_dispatch(
                                 message_obj,
-                                build_safe_path(tempFolder, f"{filename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}"),
+                                temp_path,
                                 check_start_callback,
+                                resume_from=resume_from,
+                                refresh_document=refresh_source_document,
                             )
                         )
                         # 注册到全局 active_download_tasks 供 /api/cancel 使用
@@ -3427,34 +3615,65 @@ try:
                                     pause_check_time = None
 
                             elapsed = (time.time() - start_time) - paused_accumulated
-                            if elapsed > download_timeout:
-                                raise asyncio.TimeoutError(f"Download exceeded {download_timeout} seconds")
+                            if elapsed > effective_timeout:
+                                raise asyncio.TimeoutError(
+                                    f"Download exceeded {effective_timeout} seconds")
                             if download_started[0] and (time.time() - last_progress_time[0]) > no_progress_timeout:
                                 raise asyncio.TimeoutError(f"No download progress for {no_progress_timeout} seconds")
                             await asyncio.sleep(1)
 
                         await download_task
-                        
+
+                        # 完整性校验：续传是靠"临时文件已有多少字节"推断断点的，一旦
+                        # 偏移量算错就会产出一个大小对得上、内容却错位的文件。这里在
+                        # 搬运之前先核对大小，对不上就当失败处理（半成品会被清掉重下）。
+                        if size and os.path.exists(temp_path):
+                            downloaded_bytes = os.path.getsize(temp_path)
+                            if downloaded_bytes != size:
+                                # 这份半成品不可信，留着只会让下一轮从错误的断点继续，
+                                # 直接删掉，让重试从头来过。
+                                with contextlib.suppress(OSError):
+                                    os.remove(temp_path)
+                                raise IOError(
+                                    f"Downloaded size mismatch for {filename}: "
+                                    f"got {downloaded_bytes} bytes, expected {size}")
+
                         await set_progress(download_id, filename, message, 100, 100, size=size, source_message_link=source_message_link)
-                        move(build_safe_path(tempFolder, f"{filename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}"), download_path)
-                    except asyncio.TimeoutError as e:
+                        move(temp_path, download_path)
+                        # 文件已经搬走，续传信息作废
+                        if download_id is not None:
+                            with contextlib.suppress(Exception):
+                                async with db_lock:
+                                    cursor.execute(
+                                        'UPDATE downloads SET temp_path = NULL WHERE id = ?',
+                                        (download_id,))
+                                    conn.commit()
+                    except (asyncio.TimeoutError, asyncio.CancelledError) as e:
+                        cancelled = isinstance(e, asyncio.CancelledError)
                         if download_task is not None and not download_task.done():
                             download_task.cancel()
                             try:
                                 await download_task
                             except asyncio.CancelledError:
                                 pass
-                        # 清理临时文件
-                        temp_file_path = build_safe_path(tempFolder, f"{filename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}")
-                        if os.path.exists(temp_file_path):
-                            os.remove(temp_file_path)
+                        # 半成品**留着**：下一次重试从这里接着下，而不是从 0 重来。
+                        # 用户主动取消的情况由后面的 was_cancelled 分支负责删除。
+                        keep_partial = False
+                        if resume_enabled and os.path.exists(temp_path):
+                            with contextlib.suppress(OSError):
+                                partial_bytes = os.path.getsize(temp_path)
+                                if 0 < partial_bytes < (size or 0):
+                                    keep_partial = True
+                                    logger.info(
+                                        "Keeping %d bytes of %s for the next attempt to resume from",
+                                        partial_bytes, temp_path)
+                        if not keep_partial:
+                            with contextlib.suppress(OSError):
+                                if os.path.exists(temp_path):
+                                    os.remove(temp_path)
+                        if cancelled:
+                            raise asyncio.TimeoutError("Download was cancelled")
                         raise
-                    except asyncio.CancelledError:
-                        # 清理临时文件
-                        temp_file_path = build_safe_path(tempFolder, f"{filename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}")
-                        if os.path.exists(temp_file_path):
-                            os.remove(temp_file_path)
-                        raise asyncio.TimeoutError("Download was cancelled")
                     await log_reply(message, "{0} ready in {1}".format(filename, file_category))
                     logger.info(f"Download completed: {filename} saved to {download_path}")
 
@@ -3505,13 +3724,13 @@ try:
                             async with db_lock:
                                 cursor.execute(
                                     '''
-                                    UPDATE downloads SET status = ?, error_message = ?, end_time = CURRENT_TIMESTAMP WHERE id = ?
+                                    UPDATE downloads SET status = ?, error_message = ?, temp_path = NULL, end_time = CURRENT_TIMESTAMP WHERE id = ?
                                     ''',
                                     ('cancelled', 'Cancelled by user', download_id)
                                 )
                                 conn.commit()
                             logger.info(f"Download cancelled by user: ID={download_id}, filename={filename}")
-                        # 清理临时文件
+                        # 用户主动取消：半成品没有保留价值，删掉
                         with contextlib.suppress(Exception):
                             temp_file_path = build_safe_path(tempFolder, f"{filename}.{TELEGRAM_DAEMON_TEMP_SUFFIX}")
                             if os.path.exists(temp_file_path):
@@ -3534,23 +3753,47 @@ try:
                             if result:
                                 current_retry = result[0] or 0
 
+                    # 这一轮实际往前推进了多少字节？开了续传之后，"失败但下了 800MB" 和
+                    # "失败且原地踏步" 是两回事：前者再来几轮就下完了，不该消耗重试次数，
+                    # 否则大文件仍旧会在第 3 次重试后被判死刑。
+                    # 门槛设成 MEANINGFUL_PROGRESS_BYTES，避免每轮只挪几个字节从而无限重试。
+                    MEANINGFUL_PROGRESS_BYTES = 8 * 1024 * 1024
+                    progressed_bytes = 0
+                    if resume_enabled and temp_path:
+                        with contextlib.suppress(OSError):
+                            if os.path.exists(temp_path):
+                                progressed_bytes = max(0, os.path.getsize(temp_path) - resume_from)
+                    made_progress = progressed_bytes >= MEANINGFUL_PROGRESS_BYTES
+
                     # 检查是否可以重试
-                    if current_retry < max_retries:
-                        # 更新重试次数，状态改回 queued
-                        new_retry = current_retry + 1
+                    if made_progress or current_retry < max_retries:
+                        # 有实质进展的这一轮不计入重试次数
+                        new_retry = current_retry if made_progress else current_retry + 1
+                        if made_progress:
+                            retry_note = (
+                                f"Resuming (+{progressed_bytes // (1024 * 1024)} MB this attempt): {error_msg}")
+                        else:
+                            retry_note = f"Retry {new_retry}: {error_msg}"
                         if download_id:
                             async with db_lock:
                                 cursor.execute('''
                                 UPDATE downloads SET status = 'queued', retry_count = ?, error_message = ? WHERE id = ?
-                                ''', (new_retry, f"Retry {new_retry}: {error_msg}", download_id))
+                                ''', (new_retry, retry_note, download_id))
                                 conn.commit()
-                            logger.info(f"Retry {new_retry}/{max_retries} for: {filename}")
-                        
+                            logger.info(
+                                f"Requeued {filename}: retry {new_retry}/{max_retries}, "
+                                f"+{progressed_bytes} bytes this attempt")
+
                         # 重新加入队列；保留 5 元素结构，避免 monitor_queue_health / api_tasks 漏掉 queued_at
                         await asyncio.sleep(5)  # 等待5秒后重试
                         await push_queue_item([message_obj, message, target_dir_override, download_id, time.time()])
 
-                        await log_reply(message, f"⚠️ Retry {new_retry}/{max_retries}: {filename}")
+                        if made_progress:
+                            await log_reply(
+                                message,
+                                f"⏳ 续传中（本轮 +{progressed_bytes // (1024 * 1024)} MB）: {filename}")
+                        else:
+                            await log_reply(message, f"⚠️ Retry {new_retry}/{max_retries}: {filename}")
                     else:
                         # 重试次数用完，标记为失败并通知
                         if download_id:

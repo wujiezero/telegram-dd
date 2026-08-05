@@ -12,13 +12,21 @@ services:
       - TELEGRAM_DAEMON_SESSION_PATH=/session
       # 某些 NAS/面板的 bind mount 目录可读但不可创建锁文件；遇到权限问题时可打开这一项。
       #- TELEGRAM_DAEMON_LOCK_FILE=/tmp/DownloadDaemon.lock
+      # 注意：多个 worker 并不会带来成倍的总带宽——Telegram 按连接限速，而分块下载
+      # 的连接数（下面那项）才是真正的提速手段。worker 数只决定"同时处理几个文件"。
       - TELEGRAM_DAEMON_WORKERS=2
-      # 单文件多连接并行下载。实测在跨 DC（文件不在会话所在数据中心）场景下，导出授权 +
-      # 多连接拉同一文件会被 Telegram 重度限流，反而比原生下载慢很多，故默认关闭（=1，走原生下载）。
-      # 仅当确认能提速时再调到 2~8 试验（过多易触发 flood-wait）。
-      - TELEGRAM_DAEMON_PARALLEL_CONNECTIONS=1
+      # 单文件多连接并行分块下载的连接数。Telegram 的下载限速按连接计，=1 就是天花板，
+      # 非 Premium 账号尤其明显。4 是稳妥的默认值，网络好可以调到 8（过多易触发 flood-wait）。
+      - TELEGRAM_DAEMON_PARALLEL_CONNECTIONS=4
       # 仅体积 >= 此值（MB）的文件走并行下载，小文件并行收益低。
       - TELEGRAM_DAEMON_PARALLEL_MIN_SIZE_MB=10
+      # 断点续传：下载超时/出错时保留 .tdd 半成品，重试从断点接着下而不是从 0 重来。
+      - TELEGRAM_DAEMON_RESUME=1
+      # 单文件总超时 = max(DOWNLOAD_TIMEOUT, 文件大小 / MIN_SPEED_BPS)。
+      # 一刀切的 3600 秒会把"正常但慢"的大文件误杀；真正卡死的下载由
+      # NO_PROGRESS_TIMEOUT（默认 300 秒没有任何字节进来就砍）负责。
+      - TELEGRAM_DAEMON_DOWNLOAD_TIMEOUT=3600
+      - TELEGRAM_DAEMON_MIN_SPEED_BPS=49152
       # 监听频道里出现的 t.me 消息链接（含私密频道 t.me/c/<id>/<msg>），自动抓取并下载。
       # 前提是登录账号本身在那个私密频道里。
       - TELEGRAM_DAEMON_LINK_DOWNLOAD=${TELEGRAM_DAEMON_LINK_DOWNLOAD:-1}
