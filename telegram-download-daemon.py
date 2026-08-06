@@ -3416,12 +3416,22 @@ try:
                             # 新增一行 —— 让 total_tasks 缓存下一次读取刷新
                             invalidate_total_tasks_count()
                         else:
+                            # start_time 重新打点：它和 end_time 成对显示在页面上，两者之差
+                            # 必须是一段**真实连续**的下载时间。老逻辑只在 INSERT 时写一次，
+                            # 于是 Web 上点重试时 start_time 还停在最初入队那一刻，一条隔天
+                            # 重试的记录会显示成"跑了 28 小时"，实际只下了 91 分钟。
+                            #
+                            # 打点选在"worker 真正开始下载"这一刻，而不是入队那一刻，
+                            # 所以排队等待的时间不计入耗时；每次尝试都重打，首次和重试
+                            # 口径一致。续传的那次只覆盖最后一段，页面上另有"重试 N"
+                            # 说明前面还有过几轮。
                             cursor.execute(
                                 '''
                                 UPDATE downloads
                                 SET filename = ?, file_type = ?, status = 'downloading', size = ?, progress = ?,
                                     download_path = ?, source_channel_id = ?, source_message_id = ?,
-                                    source_message_link = ?, target_dir = ?, temp_path = ?, end_time = NULL
+                                    source_message_link = ?, target_dir = ?, temp_path = ?,
+                                    start_time = CURRENT_TIMESTAMP, end_time = NULL
                                 WHERE id = ?
                                 ''',
                                 (
