@@ -20,7 +20,7 @@ import unittest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from fast_download import get_parallel_location  # noqa: E402
+from fast_download import CdnRedirectNeeded, get_parallel_location  # noqa: E402
 
 DAEMON_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "telegram-download-daemon.py")
@@ -46,6 +46,8 @@ def _load_dispatch(**globals_override):
         "get_parallel_location": get_parallel_location,
         "parallel_connections": 4,
         "parallel_min_size_bytes": 10 * 1024 * 1024,
+        "resume_enabled": True,
+        "CdnRedirectNeeded": CdnRedirectNeeded,
     }
     namespace.update(globals_override)
     module = ast.Module(body=picked, type_ignores=[])
@@ -69,11 +71,13 @@ class FakeMessage:
 class Recorder:
     """记录分块下载器 / 原生下载器分别被怎么调用。"""
 
-    def __init__(self, chunked_error=None, written=b""):
+    def __init__(self, chunked_error=None, written=b"", bytes_before_error=0):
         self.chunked_calls = []
         self.native_calls = []
         self.chunked_error = chunked_error
         self.written = written
+        # 失败之前已经落盘的字节数（真实的分块下载器是边下边写的）
+        self.bytes_before_error = bytes_before_error
 
     async def fast_download_file(self, client, document, out, progress_callback=None,
                                  connection_count=None, start_offset=0,
@@ -87,6 +91,9 @@ class Recorder:
             "refresh_document": refresh_document,
         })
         if self.chunked_error:
+            if self.bytes_before_error:
+                out.write(b"y" * self.bytes_before_error)
+                out.flush()
             raise self.chunked_error
         out.write(self.written)
         return start_offset + len(self.written)
@@ -206,17 +213,63 @@ class ResumeTests(DispatchTestCase):
 
 
 class FallbackTests(DispatchTestCase):
-    def test_chunked_failure_falls_back_and_clears_the_partial(self):
-        """原生下载器不支持续传，半成品留着会被当成完整文件，必须先清掉。"""
-        rec = Recorder(chunked_error=RuntimeError("cdn redirect"))
+    def test_failure_without_progress_falls_back_and_clears_the_partial(self):
+        """一个字节都没推进时，才轮到原生下载器。
+
+        原生下载器不支持续传，半成品留着会被当成完整文件，所以降级前必须先清掉。
+        """
+        rec = Recorder(chunked_error=RuntimeError("nothing worked"))
         dispatch = self.build(rec)
-        self.write_partial(8192)
+        self.write_partial(4096)
         asyncio.run(dispatch(FakeMessage(size=50 * 1024**2), self.temp_path, None,
                              resume_from=4096))
         self.assertEqual(len(rec.chunked_calls), 1)
         self.assertEqual(len(rec.native_calls), 1)
         self.assertFalse(rec.native_calls[0]["existed_on_entry"],
-                         "the stale partial should have been removed before falling back")
+                         "降级到原生下载前应该先清掉半成品")
+
+    def test_failure_after_progress_keeps_the_partial_and_reraises(self):
+        """分块下载已经推进了字节，就不能推倒重来。
+
+        这是"大文件总是失败"的另一半原因：以前只要分块路径抛错，
+        就无条件删半成品 + 用不支持 offset 的原生下载器从 0 重跑。
+        一个 2GB 的文件每撞上一次瞬时断连就前功尽弃，而且重试次数照样被消耗掉
+        （progressed_bytes 会算成 0），3 次之后直接判死刑。
+        正确做法是把错误抛出去，让 worker 下一轮从这里续传。
+        """
+        rec = Recorder(chunked_error=ConnectionError("connection reset"),
+                       bytes_before_error=1024 * 1024)
+        dispatch = self.build(rec)
+        self.write_partial(4096)
+
+        with self.assertRaises(ConnectionError):
+            asyncio.run(dispatch(FakeMessage(size=50 * 1024**2), self.temp_path, None,
+                                 resume_from=4096))
+
+        self.assertEqual(rec.native_calls, [], "有进展时不该降级到不支持续传的原生下载器")
+        self.assertTrue(os.path.exists(self.temp_path), "半成品必须留着给下一轮续传")
+        self.assertGreater(os.path.getsize(self.temp_path), 4096,
+                           "这一轮下到的字节必须保留下来")
+
+    def test_cdn_redirect_always_falls_back_even_with_progress(self):
+        """CDN 重定向分块下载器处理不了，重试多少次都是同一个结果，必须降级。"""
+        rec = Recorder(chunked_error=CdnRedirectNeeded("cdn"),
+                       bytes_before_error=1024 * 1024)
+        dispatch = self.build(rec)
+        self.write_partial(4096)
+        asyncio.run(dispatch(FakeMessage(size=50 * 1024**2), self.temp_path, None,
+                             resume_from=4096))
+        self.assertEqual(len(rec.native_calls), 1, "CDN 重定向应该降级到原生下载器")
+        self.assertFalse(rec.native_calls[0]["existed_on_entry"],
+                         "降级前应该清掉半成品")
+
+    def test_resume_disabled_still_falls_back(self):
+        """关掉续传时保留半成品没有意义，维持原来的降级行为。"""
+        rec = Recorder(chunked_error=ConnectionError("reset"),
+                       bytes_before_error=1024 * 1024)
+        dispatch = self.build(rec, resume_enabled=False)
+        asyncio.run(dispatch(FakeMessage(size=50 * 1024**2), self.temp_path, None))
+        self.assertEqual(len(rec.native_calls), 1)
 
     def test_cancellation_is_not_swallowed(self):
         """取消必须原样往上抛，不能被当成"并行失败"降级成原生下载重来一遍。"""

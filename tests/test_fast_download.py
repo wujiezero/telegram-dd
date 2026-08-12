@@ -236,3 +236,96 @@ class ParallelDownloadTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TransientConnectionErrorTests(unittest.TestCase):
+    """瞬时断连不能判整个文件死刑。
+
+    Telethon 的 ``client._call`` 只对 ServerError / RpcCallFail / TimedOut 这几类
+    做内部重试，**连接层的错误（ConnectionError / OSError）会原样抛出来**。
+    ``request_chunk`` 以前只接住 file_reference 过期、flood-wait、TimedOut 三种，
+    于是一次代理抖动就会让 _ChunkSource 把异常塞进队列、download() 原样抛出，
+    整个多 GB 的文件直接失败。下载耗时越长越必然撞上——这就是"大文件总是失败"。
+    """
+
+    class FlakySender:
+        def __init__(self):
+            self.connected = True
+            self.reconnects = 0
+
+        def is_connected(self):
+            return self.connected
+
+        async def connect(self, _connection):
+            self.connected = True
+            self.reconnects += 1
+
+        async def disconnect(self):
+            self.connected = False
+
+    def setUp(self):
+        # 退避里的 sleep 对测试没有意义，跳过它，别让单测跑几十秒
+        self._real_sleep = asyncio.sleep
+
+        async def no_sleep(_delay, result=None):
+            return await self._real_sleep(0, result)
+
+        fast_download.asyncio.sleep = no_sleep
+
+    def tearDown(self):
+        fast_download.asyncio.sleep = self._real_sleep
+
+    def _make(self, exc_factory, fail_times):
+        """造一个前 fail_times 次抛指定异常、之后正常返回的 transferrer。"""
+        state = {"calls": 0}
+        payload = b"x" * 32
+
+        class C:
+            session = type("S", (), {"dc_id": 2, "auth_key": object()})()
+            _log = {}
+            _proxy = None
+
+            async def _call(self, sender, request):
+                state["calls"] += 1
+                if state["calls"] <= fail_times:
+                    sender.connected = False        # 模拟连接被打断
+                    raise exc_factory()
+                return FakeResult(payload[request.offset:request.offset + request.limit])
+
+            async def _get_dc(self, dc_id):
+                return type("DC", (), {"ip_address": "1.2.3.4", "port": 443, "id": 2})()
+
+            def _connection(self, *a, **kw):
+                return object()
+
+        client = C()
+        transferrer = ParallelTransferrer(client, dc_id=None, max_chunk_retries=5)
+        transferrer._location = object()
+        return transferrer, state
+
+    def test_connection_error_is_retried_and_sender_reconnected(self):
+        transferrer, state = self._make(lambda: ConnectionError("connection reset"), fail_times=2)
+        sender = self.FlakySender()
+
+        async def scenario():
+            return await transferrer.request_chunk(sender, 0, 16)
+
+        data = asyncio.run(scenario())
+        self.assertEqual(len(data), 16, "重试成功后应该拿到正常数据")
+        self.assertEqual(state["calls"], 3, "前两次断连应该被重试掉")
+        self.assertEqual(sender.reconnects, 2, "每次断连后都应该先重连再重试")
+        self.assertTrue(sender.is_connected(), "重试前应该先把断掉的连接重连上")
+
+    def test_os_error_is_retried(self):
+        transferrer, state = self._make(lambda: OSError("proxy went away"), fail_times=1)
+        sender = self.FlakySender()
+        data = asyncio.run(transferrer.request_chunk(sender, 0, 16))
+        self.assertEqual(len(data), 16)
+        self.assertEqual(state["calls"], 2)
+
+    def test_gives_up_after_max_retries(self):
+        """一直连不上还是要失败，不能无限重试把任务挂死。"""
+        transferrer, _state = self._make(lambda: ConnectionError("down"), fail_times=99)
+        sender = self.FlakySender()
+        with self.assertRaises(ConnectionError):
+            asyncio.run(transferrer.request_chunk(sender, 0, 16))

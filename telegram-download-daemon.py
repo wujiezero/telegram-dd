@@ -45,6 +45,7 @@ from tdd_utils import (
 from fast_download import (
     align_down,
     choose_part_size,
+    CdnRedirectNeeded,
     download_file as fast_download_file,
     get_parallel_location,
 )
@@ -2062,6 +2063,32 @@ async def download_media_dispatch(message_obj, temp_path, progress_callback,
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            downloaded_now = 0
+            with contextlib.suppress(OSError):
+                if os.path.exists(temp_path):
+                    downloaded_now = os.path.getsize(temp_path)
+
+            # 分块路径已经写进去的字节是有价值的：把错误原样抛出去，让 worker 的
+            # 重试逻辑下一轮从这里**续传**。
+            #
+            # 老逻辑无条件删半成品再从 0 跑原生下载器，于是一个 2GB 的文件每撞上
+            # 一次瞬时断连就前功尽弃；而且原生下载器不支持 offset，重试时
+            # `progressed_bytes = getsize(temp) - resume_from` 会算成 0，
+            # 这一轮还要白白消耗一次重试次数，3 次之后直接判死刑。
+            # 下载耗时越长越必然撞上——这就是"大文件总是失败"的另一半原因。
+            #
+            # CDN 重定向是例外：分块下载器处理不了，再重试多少次都是同一个结果，
+            # 必须清掉半成品交给原生下载器。
+            if (resume_enabled
+                    and not isinstance(exc, CdnRedirectNeeded)
+                    and downloaded_now > resume_from):
+                logger.warning(
+                    "Chunked download failed at %d bytes (%s); keeping the partial file so the "
+                    "next attempt resumes instead of restarting",
+                    downloaded_now, exc,
+                )
+                raise
+
             logger.warning(
                 "Chunked download failed (%s); falling back to the native downloader for %s",
                 exc, temp_path,
@@ -2274,11 +2301,15 @@ try:
         video_queue = asyncio.Queue()
         other_queue = asyncio.Queue()
         
+        # 三条队列里"当前可取的任务总数"。worker 先领一个名额再去取，
+        # 这样就不需要三个并发的 queue.get() 相互竞争（见 pop_next_queue_item）。
+        queue_slots = asyncio.Semaphore(0)
+
         # 为每个队列创建跟踪列表
         photo_queue_items = []
         video_queue_items = []
         other_queue_items = []
-        
+
         # 合并所有队列项用于命令查询
         queue_items = []
         
@@ -2320,6 +2351,9 @@ try:
             async with queue_lock:
                 await target_queue.put(queue_item)
                 target_items.append(queue_item)
+                # 放完货再放名额，顺序不能反：先 release 会让 worker 在
+                # 队列还没写进去的时候就跑去取，取不到东西。
+                queue_slots.release()
                 rebuild_web_queue_items()
                 # 维护 id -> queue_item 索引，便于 /api/cancel 直接定位待取出的 item
                 queue_download_id = queue_item[3] if len(queue_item) > 3 else None
@@ -2337,28 +2371,46 @@ try:
             return queue_type
 
         async def pop_next_queue_item():
-            queue_getters = {
-                asyncio.create_task(photo_queue.get()): (photo_queue, photo_queue_items, 'photo'),
-                asyncio.create_task(video_queue.get()): (video_queue, video_queue_items, 'video'),
-                asyncio.create_task(other_queue.get()): (other_queue, other_queue_items, 'other'),
-            }
+            """取下一个待下载任务。
 
-            done = set()
-            pending = set()
+            这里**不能**用"给三条队列各起一个 get() 然后 asyncio.wait(FIRST_COMPLETED)"
+            的写法。asyncio.wait 在有多个 getter 同时就绪时会把它们**全部**放进 done，
+            而队列元素在 get() 返回的那一刻就已经从 asyncio.Queue 里移走了。老代码只
+            取 done.pop() 一个、把其余的 result() 丢掉，于是"只要同时有两条以上队列非空，
+            多出来的任务就凭空消失"——它们仍留在 queue_items / web_queue_items 里，
+            数据库状态也还是 queued，页面上永远显示"排队中"，但没有任何 worker 会再碰它。
+            重试路径同样是 push_queue_item，所以失败重投的任务也会这样被吞掉。
+
+            改成计数信号量：先领一个"有货"的名额，领到就保证一定能取到东西，
+            然后按固定优先级从非空队列里拿。全程没有并发的 getter，也就没有这个竞态。
+            """
+            await queue_slots.acquire()
+            took = False
             try:
-                done, pending = await asyncio.wait(queue_getters.keys(), return_when=asyncio.FIRST_COMPLETED)
-                completed_task = done.pop()
-                queue_ref, queue_items_list_ref, queue_type = queue_getters[completed_task]
-                element = completed_task.result()
-
                 async with queue_lock:
-                    if element in queue_items_list_ref:
-                        queue_items_list_ref.remove(element)
-                    # 从"待取出"索引中剔除
-                    element_download_id = element[3] if len(element) > 3 else None
-                    if element_download_id is not None:
-                        active_queue_items_by_id.pop(str(element_download_id), None)
-                    rebuild_web_queue_items()
+                    for queue_ref, queue_items_list_ref, queue_type in (
+                        (photo_queue, photo_queue_items, 'photo'),
+                        (video_queue, video_queue_items, 'video'),
+                        (other_queue, other_queue_items, 'other'),
+                    ):
+                        if queue_ref.empty():
+                            continue
+                        element = queue_ref.get_nowait()
+                        took = True
+                        if element in queue_items_list_ref:
+                            queue_items_list_ref.remove(element)
+                        # 从"待取出"索引中剔除
+                        element_download_id = element[3] if len(element) > 3 else None
+                        if element_download_id is not None:
+                            active_queue_items_by_id.pop(str(element_download_id), None)
+                        rebuild_web_queue_items()
+                        break
+                    else:
+                        # 名额和队列对不上，说明有别的地方绕过 push_queue_item 动了队列
+                        raise RuntimeError(
+                            "queue_slots is out of sync with the queues "
+                            f"(photo={photo_queue.qsize()}, video={video_queue.qsize()}, "
+                            f"other={other_queue.qsize()})")
 
                 logger.info(
                     "Dequeued task id=%s filename=%s queue=%s remaining(photo=%s, video=%s, other=%s)",
@@ -2371,14 +2423,9 @@ try:
                 )
                 return element, queue_ref, queue_items_list_ref, queue_type
             finally:
-                for pending_task in pending:
-                    pending_task.cancel()
-                if pending:
-                    await asyncio.gather(*pending, return_exceptions=True)
-                for done_task in done:
-                    if not done_task.cancelled():
-                        with contextlib.suppress(Exception):
-                            done_task.result()
+                # 没真正取到东西（异常/取消）就把名额还回去，否则会永久漏掉一个任务
+                if not took:
+                    queue_slots.release()
 
         async def refresh_channel_info():
             global telegram_channel_info
@@ -2885,6 +2932,20 @@ try:
                     now = time.time()
                     stale_entries = []
                     async with queue_lock:
+                        # 不变式：拿着 queue_lock 的时候，三条 asyncio.Queue 里的元素数
+                        # 必须和跟踪列表 queue_items 一致。对不上就说明有任务被"取出但没人处理"
+                        # ——页面上会永远显示排队中，而没有任何 worker 会碰它。
+                        # 这个坑之前就踩过（见 pop_next_queue_item 的注释），
+                        # 这里留一道明确的告警，别再让它悄无声息。
+                        queued_total = (photo_queue.qsize() + video_queue.qsize()
+                                        + other_queue.qsize())
+                        if queued_total != len(queue_items):
+                            logger.error(
+                                "Queue bookkeeping mismatch: asyncio queues hold %d items but "
+                                "the tracking list has %d (photo=%d, video=%d, other=%d). "
+                                "Tasks may be stuck as 'queued' forever.",
+                                queued_total, len(queue_items),
+                                photo_queue.qsize(), video_queue.qsize(), other_queue.qsize())
                         for item in list(queue_items):
                             download_id = item[3] if len(item) > 3 else None
                             queued_at = item[4] if len(item) > 4 and isinstance(item[4], (int, float)) else None

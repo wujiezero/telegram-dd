@@ -214,6 +214,23 @@ class ParallelTransferrer:
             _, self._location = utils.get_input_location(document)
             self._refresh_generation += 1
 
+    async def _reconnect_sender(self, sender: MTProtoSender) -> None:
+        """连接掉了就重连。
+
+        这些是 ``ExportAuthorization`` 出来的独立 sender，断开之后
+        ``sender.send()`` 会直接抛 ``ConnectionError``；不重连的话后面几次重试
+        全是徒劳，只是把同一个错误再抛一遍。
+        """
+        if sender.is_connected():
+            return
+        dc = await self.client._get_dc(self.dc_id)
+        await sender.connect(self.client._connection(
+            dc.ip_address, dc.port, dc.id,
+            loggers=self.client._log,
+            proxy=self.client._proxy,
+        ))
+        log.info("Reconnected a parallel download sender to DC %s", self.dc_id)
+
     async def request_chunk(self, sender: MTProtoSender, offset: int, limit: int) -> bytes:
         last_error: Optional[BaseException] = None
         for attempt in range(self._max_chunk_retries):
@@ -239,6 +256,20 @@ class ParallelTransferrer:
                 log.info("Timeout on chunk at offset %d, retrying (%d/%d)",
                          offset, attempt + 1, self._max_chunk_retries)
                 await asyncio.sleep(1)
+            except (ConnectionError, OSError, EOFError, asyncio.TimeoutError) as exc:
+                # 断线 / 代理抖动。Telethon 的 client._call 只对
+                # ServerError / RpcCallFail / TimedOut 这几类做重试，连接层的错误
+                # 会**原样抛出来**；老代码没接住，于是一次瞬时断连就直接判整个文件失败。
+                # 下载得越久越必然撞上，这正是"大文件必挂"的直接原因。
+                last_error = exc
+                backoff = min(2 ** attempt, 16)
+                log.warning(
+                    "Connection error on chunk at offset %d (%s); reconnecting and retrying "
+                    "in %ds (%d/%d)",
+                    offset, exc, backoff, attempt + 1, self._max_chunk_retries)
+                await asyncio.sleep(backoff)
+                with contextlib.suppress(Exception):
+                    await self._reconnect_sender(sender)
         raise last_error if last_error is not None else RuntimeError(
             f"Failed to fetch chunk at offset {offset}")
 
