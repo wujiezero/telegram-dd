@@ -173,6 +173,10 @@ TELEGRAM_DAEMON_NO_PROGRESS_TIMEOUT=int(_env_or_none("TELEGRAM_DAEMON_NO_PROGRES
 TELEGRAM_DAEMON_MAX_RETRIES=int(_env_or_none("TELEGRAM_DAEMON_MAX_RETRIES", "3"))  # 最大重试次数，默认3次
 TELEGRAM_DAEMON_NOTIFY_FAILURE=bool(int(_env_or_none("TELEGRAM_DAEMON_NOTIFY_FAILURE", "1")))  # 失败通知，默认开启
 TELEGRAM_DAEMON_QUEUE_WARN_SECONDS=int(_env_or_none("TELEGRAM_DAEMON_QUEUE_WARN_SECONDS", "120"))
+# 通知类 RPC（编辑状态消息、发提醒）的统一超时（秒），见 bounded_notify
+TELEGRAM_DAEMON_NOTIFY_RPC_TIMEOUT=int(_env_or_none("TELEGRAM_DAEMON_NOTIFY_RPC_TIMEOUT", "30"))
+# 队列非空但 0 个 worker 在消化，持续超过该秒数就按"流水线停摆"升级 CRITICAL
+TELEGRAM_DAEMON_PIPELINE_STALL_CRITICAL_SECONDS=int(_env_or_none("TELEGRAM_DAEMON_PIPELINE_STALL_CRITICAL_SECONDS", "600"))
 # 单文件并行下载连接数：>1 时对足够大的文件启用多连接并行分块下载。
 # Telegram 的下载限速按连接计，单连接（=1）就是天花板，非 Premium 账号尤其明显。
 # 默认 4：明显提速且不容易触发 flood-wait；网络好可以往上调到 8。
@@ -1969,10 +1973,25 @@ def disconnect_client_and_loop(loop, client_instance):
         loop.close()
 
 
+async def bounded_notify(rpc_coro, what: str):
+    """通知类 RPC 的保险丝：超时/失败一律丢弃通知并返回 None。
+
+    主连接陷入重连风暴时，Telethon 的 pending 请求会无限挂起而不抛错——
+    2026-08-14 生产上两个 worker 就冻死在重试通知的 message.edit() 上，
+    队列从此永远 "Waiting for download"。通知发不出去只能丢，绝不允许拖死
+    调用方的流水线。主动取消（CancelledError）照常向上抛，暂停/取消机制不受影响。
+    """
+    try:
+        return await asyncio.wait_for(rpc_coro, timeout=TELEGRAM_DAEMON_NOTIFY_RPC_TIMEOUT)
+    except Exception as notify_error:
+        logger.warning(f"Notification RPC dropped ({what}): {notify_error}")
+        return None
+
+
 async def log_reply(message: events.NewMessage.Event, reply: str) -> None:
     print(reply)
     if message is not None:
-        await message.edit(reply)
+        await bounded_notify(message.edit(reply), "edit status message")
 
 
 def compute_download_timeout(size):
@@ -2615,12 +2634,15 @@ try:
             频道里发消息。这里的规则是：优先回复调用方指定的 reply_target（通常是
             被监听频道里那条含链接的消息），否则只有来源就是被监听频道时才直接回复，
             剩下的情况统一发到被监听频道。
+
+            发送走 bounded_notify：断链/限流/风暴时返回 None（所有调用方都接受
+            status_message 为 None），绝不挂死调用方。
             """
             if reply_target is not None:
-                return await reply_target.reply(text)
+                return await bounded_notify(reply_target.reply(text), "reply to link request")
             if is_monitored_channel_message(message_obj):
-                return await message_obj.reply(text)
-            return await client.send_message(peerChannel, text)
+                return await bounded_notify(message_obj.reply(text), "reply in monitored channel")
+            return await bounded_notify(client.send_message(peerChannel, text), "send to monitored channel")
 
         async def enqueue_download_message(message_obj, notice_template="{0} added to queue", target_dir_override=None, existing_download_id=None, silent=False, recovery_note=None, reply_target=None):
             is_photo = getattr(message_obj, 'photo', None) is not None
@@ -2867,11 +2889,9 @@ try:
                 len(links), queued_total, skipped_total
             )
             if status_message is not None:
-                with contextlib.suppress(Exception):
-                    await status_message.edit(summary)
+                await bounded_notify(status_message.edit(summary), "edit link summary")
             elif queued_total == 0:
-                with contextlib.suppress(Exception):
-                    await source_message.reply(summary)
+                await bounded_notify(source_message.reply(summary), "reply link summary")
 
         async def restore_pending_downloads():
             async with db_lock:
@@ -2926,6 +2946,7 @@ try:
 
         async def monitor_queue_health():
             warned_queue_ids = set()
+            pipeline_stalled_since = None
             while True:
                 try:
                     await asyncio.sleep(30)
@@ -2954,6 +2975,21 @@ try:
                             queue_age = int(max(now - queued_at, 0))
                             if queue_age >= TELEGRAM_DAEMON_QUEUE_WARN_SECONDS:
                                 stale_entries.append((str(download_id), getFilename(item[0]), queue_age))
+
+                    # 流水线级停摆：队列非空但没有任何 worker 在消化，说明 worker 全部
+                    # 冻住或退出了（2026-08-14 事故形态：全员挂死在无超时的通知 RPC 上）。
+                    # 单任务的 stalled 告警只反映"排队久"，这里是全局判定，单独升级。
+                    if queued_total > 0 and len(in_progress) == 0:
+                        if pipeline_stalled_since is None:
+                            pipeline_stalled_since = now
+                        stalled_for = int(now - pipeline_stalled_since)
+                        if stalled_for >= TELEGRAM_DAEMON_PIPELINE_STALL_CRITICAL_SECONDS:
+                            logger.critical(
+                                "Download pipeline stalled: %d queued / 0 active for %ds; "
+                                "workers are likely frozen — restart the container to recover",
+                                queued_total, stalled_for)
+                    else:
+                        pipeline_stalled_since = None
 
                     current_stale_ids = {entry[0] for entry in stale_entries}
                     warned_queue_ids.intersection_update(current_stale_ids)

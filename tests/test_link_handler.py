@@ -95,6 +95,11 @@ class FakeMedia:
         self.document = None
 
 
+async def _passthrough_notify(rpc_coro, what):
+    """bounded_notify 的透传替身：测试里不关心超时，只要行为等价于直接 await。"""
+    return await rpc_coro
+
+
 class HandleLinkMessageTests(unittest.IsolatedAsyncioTestCase):
     def _build(self, fetch, enqueue, max_messages=50, status_limit=5):
         self.logger = FakeLogger()
@@ -105,6 +110,7 @@ class HandleLinkMessageTests(unittest.IsolatedAsyncioTestCase):
             "LINK_STATUS_MESSAGE_LIMIT": status_limit,
             "fetch_link_messages": fetch,
             "enqueue_download_message": enqueue,
+            "bounded_notify": _passthrough_notify,
         }
         return _load_handler(namespace)
 
