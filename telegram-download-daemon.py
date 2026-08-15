@@ -7,6 +7,7 @@ from os import getenv, path
 from shutil import move
 import math
 import time
+import json
 import random
 import string
 import os
@@ -431,62 +432,105 @@ if not tempFolder:
     tempFolder = downloadFolder
    
 # Proxy configuration
-connection = None
-proxy = None
-proxy_configured_host = None
-proxy_runtime_host = None
-proxy_resolved_once = False
-if args.proxy_host and args.proxy_port:
-    # 使用字符串格式的代理类型，确保兼容性
-    proxy_type_str = args.proxy_type.lower()
-    
-    # 确保代理类型是Telethon支持的格式
-    if proxy_type_str not in ['socks5', 'http', 'mtproxy']:
-        proxy_type_str = 'socks5'  # 默认使用SOCKS5
-    
-    # 将字符串代理类型映射到 PySocks 常量
-    proxy_type_map = {
-        'socks5': socks.SOCKS5,
-        'http': socks.HTTP,
-    }
-    proxy_type_const = proxy_type_map.get(proxy_type_str, socks.SOCKS5)
-    proxy_configured_host = args.proxy_host
-    proxy_runtime_host = args.proxy_host
+PROXY_TYPES = ('socks5', 'http', 'mtproxy')
+_PROXY_TYPE_CONSTS = {
+    'socks5': socks.SOCKS5,
+    'http': socks.HTTP,
+}
 
-    if args.proxy_resolve_once and proxy_type_str in ['socks5', 'http']:
-        proxy_runtime_host = resolve_proxy_host_once(args.proxy_host, int(args.proxy_port))
-        proxy_resolved_once = proxy_runtime_host != args.proxy_host
-    elif proxy_type_str in ['socks5', 'http']:
-        try:
-            socket.inet_pton(socket.AF_INET, args.proxy_host)
-        except OSError:
+
+def normalize_proxy_config(raw) -> dict:
+    """把任意来源（.env / 页面表单 / 数据库）的代理配置规整成同一个结构。
+
+    统一在这里做校验，页面改代理和启动读 .env 才不会出现两套口径。
+    ``enabled=False`` 表示直连。端口非法或缺主机时一律降级成直连，
+    绝不把半截配置塞给 Telethon（那会在连接时才炸，且报错很难懂）。
+    """
+    raw = raw or {}
+
+    proxy_type = str(raw.get('type') or 'socks5').strip().lower()
+    if proxy_type not in PROXY_TYPES:
+        proxy_type = 'socks5'
+
+    host = str(raw.get('host') or '').strip()
+
+    port_value = raw.get('port')
+    try:
+        port = int(str(port_value).strip()) if str(port_value or '').strip() else 0
+    except (TypeError, ValueError):
+        port = 0
+    if not (0 < port < 65536):
+        port = 0
+
+    enabled = bool(raw.get('enabled', bool(host and port)))
+    if not host or not port:
+        enabled = False
+
+    return {
+        'enabled': enabled,
+        'type': proxy_type,
+        'host': host,
+        'port': port,
+        'username': str(raw.get('username') or '').strip(),
+        'password': str(raw.get('password') or ''),
+        'resolve_once': bool(raw.get('resolve_once', False)),
+    }
+
+
+def describe_proxy_config(cfg) -> str:
+    """给日志/页面用的一句话描述。**永远不包含密码。**"""
+    cfg = cfg or {}
+    if not cfg.get('enabled'):
+        return "直连（未使用代理）"
+    auth = f"{cfg['username']}:******@" if cfg.get('username') and cfg.get('password') else ""
+    return f"{cfg['type']}://{auth}{cfg['host']}:{cfg['port']}"
+
+
+def build_proxy_tuple(cfg):
+    """按配置构造 Telethon 需要的 proxy 元组；直连时返回 None。"""
+    cfg = normalize_proxy_config(cfg)
+    if not cfg['enabled']:
+        return None
+
+    proxy_type_const = _PROXY_TYPE_CONSTS.get(cfg['type'], socks.SOCKS5)
+    runtime_host = cfg['host']
+
+    if cfg['type'] in ('socks5', 'http'):
+        if cfg['resolve_once']:
+            runtime_host = resolve_proxy_host_once(cfg['host'], cfg['port'])
+        else:
             try:
-                socket.inet_pton(socket.AF_INET6, args.proxy_host)
+                socket.inet_pton(socket.AF_INET, cfg['host'])
             except OSError:
-                logger.warning(
-                    "Proxy host %s is a hostname. If your provider does DNS load balancing and Telegram reports AUTH_KEY_DUPLICATED, enable --proxy-resolve-once or TELEGRAM_DAEMON_PROXY_RESOLVE_ONCE=1.",
-                    args.proxy_host,
-                )
-    
-    # 根据是否有认证信息创建代理配置
-    if args.proxy_username and args.proxy_password:
-        proxy = (
-            proxy_type_const,
-            proxy_runtime_host,
-            int(args.proxy_port),
-            False,
-            args.proxy_username,
-            args.proxy_password
-        )
-        print(f"Using proxy: {proxy_type_str}://{args.proxy_username}:******@{args.proxy_host}:{args.proxy_port}")
-    else:
-        proxy = (
-            proxy_type_const,
-            proxy_runtime_host,
-            int(args.proxy_port),
-            False
-        )
-        print(f"Using proxy without auth: {proxy_type_str}://{args.proxy_host}:{args.proxy_port}")
+                try:
+                    socket.inet_pton(socket.AF_INET6, cfg['host'])
+                except OSError:
+                    logger.warning(
+                        "Proxy host %s is a hostname. If your provider does DNS load balancing and "
+                        "Telegram reports AUTH_KEY_DUPLICATED, enable resolve_once.",
+                        cfg['host'],
+                    )
+
+    if cfg['username'] and cfg['password']:
+        return (proxy_type_const, runtime_host, cfg['port'], False,
+                cfg['username'], cfg['password'])
+    return (proxy_type_const, runtime_host, cfg['port'], False)
+
+
+connection = None
+# .env / 命令行给出的代理配置。页面上保存的运行时配置优先级更高，
+# 但要等数据库初始化完才能读，见下面的 active_proxy_config。
+env_proxy_config = normalize_proxy_config({
+    'enabled': bool(args.proxy_host and args.proxy_port),
+    'type': args.proxy_type,
+    'host': args.proxy_host,
+    'port': args.proxy_port,
+    'username': args.proxy_username,
+    'password': args.proxy_password,
+    'resolve_once': args.proxy_resolve_once,
+})
+active_proxy_config = env_proxy_config
+proxy = None  # 在数据库初始化后按 active_proxy_config 构造
 
 # 文件类型归类规则 (FILE_TYPE_RULES) 与 getFileTypeCategory() 已抽到 tdd_utils，便于单元测试。
 
@@ -581,11 +625,83 @@ try:
         except Exception as idx_err:
             logger.warning("Failed to create index on %s: %s", idx_desc, idx_err)
 
+    # 页面上改的运行时设置存这里。放数据库而不是写回 .env，是因为容器里的环境变量
+    # 由 compose 在创建容器时注入，改 .env 文件对当前进程无效；而 /app/db 是挂载卷，
+    # 容器重建后依然在。
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
+
     conn.commit()
     logger.info("Downloads table created or already exists")
 except Exception as e:
     logger.error(f"Database initialization error: {e}")
     raise
+
+
+SETTING_PROXY = 'proxy_config'
+settings_lock = threading.Lock()
+
+
+def load_setting(key, default=None):
+    """读一条运行时设置（JSON）。读失败一律退回默认值，绝不因此拖垮启动。"""
+    try:
+        with settings_lock:
+            # 这里不用 get_db_connection()：它定义在本行之后，而模块加载时就要读设置
+            local_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+            try:
+                row = local_conn.execute(
+                    'SELECT value FROM app_settings WHERE key = ?', (key,)).fetchone()
+            finally:
+                local_conn.close()
+        if not row:
+            return default
+        return json.loads(row[0])
+    except Exception as load_error:
+        logger.warning("Failed to load setting %s: %s", key, load_error)
+        return default
+
+
+def save_setting(key, value):
+    """写一条运行时设置（JSON）。"""
+    payload = json.dumps(value, ensure_ascii=False)
+    with settings_lock:
+        local_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        try:
+            local_conn.execute(
+                '''INSERT INTO app_settings (key, value, updated_at)
+                   VALUES (?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                                  updated_at = CURRENT_TIMESTAMP''',
+                (key, payload))
+            local_conn.commit()
+        finally:
+            local_conn.close()
+
+
+def delete_setting(key):
+    with settings_lock:
+        local_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        try:
+            local_conn.execute('DELETE FROM app_settings WHERE key = ?', (key,))
+            local_conn.commit()
+        finally:
+            local_conn.close()
+
+
+# 生效优先级：页面上保存过的运行时配置 > .env / 命令行
+_stored_proxy_config = load_setting(SETTING_PROXY)
+proxy_config_source = 'env'
+if _stored_proxy_config is not None:
+    active_proxy_config = normalize_proxy_config(_stored_proxy_config)
+    proxy_config_source = 'web'
+proxy = build_proxy_tuple(active_proxy_config)
+logger.info("Proxy in use: %s (来源: %s)",
+            describe_proxy_config(active_proxy_config), proxy_config_source)
 
 # Database helper functions
 def get_db_connection():
@@ -900,6 +1016,8 @@ active_download_tasks = {}  # download_id(str) -> asyncio.Task
 # 队列中尚未取走的 item 快照 (download_id(str) -> queue_item)
 active_queue_items_by_id = {}
 web_cancel_scheduler = None
+# 供 /api/proxy 使用：把新的 proxy 元组应用到运行中的 Telethon 客户端
+web_proxy_applier = None
 cancelled_download_ids = set()
 # 暂停/恢复支持
 paused_download_ids = {}   # download_id(str) -> threading.Event（is_set=可运行，cleared=暂停）
@@ -1103,11 +1221,11 @@ def index():
             # Handle tuple format proxy
             proxy_info = {
                 'type': type_name,
-                'host': proxy_configured_host or (proxy[1] if len(proxy) > 1 else ''),
-                'runtime_host': proxy_runtime_host or (proxy[1] if len(proxy) > 1 else ''),
+                'host': active_proxy_config.get('host') or (proxy[1] if len(proxy) > 1 else ''),
+                'runtime_host': proxy[1] if len(proxy) > 1 else '',
                 'port': proxy[2] if len(proxy) > 2 else '',
                 'username': proxy[4] if len(proxy) > 4 else '',
-                'resolved_once': proxy_resolved_once,
+                'resolved_once': bool(active_proxy_config.get('resolve_once')),
             }
         else:
             # Handle dict format proxy
@@ -1116,10 +1234,10 @@ def index():
             proxy_info = {
                 'type': type_name,
                 'host': proxy.get('addr', ''),
-                'runtime_host': proxy_runtime_host or proxy.get('addr', ''),
+                'runtime_host': proxy.get('addr', ''),
                 'port': proxy.get('port', ''),
                 'username': proxy.get('username', ''),
-                'resolved_once': proxy_resolved_once,
+                'resolved_once': bool(active_proxy_config.get('resolve_once')),
             }
     
     # Get telegram user info (stored in a global variable that's updated when client starts)
@@ -1488,6 +1606,191 @@ def api_download():
     except Exception as e:
         logger.error(f'API download error: {e}', exc_info=True)
         return jsonify({'error': 'Internal server error'}), 500
+
+def _proxy_config_for_client(cfg):
+    """给页面看的配置：**永远不回传密码明文**，只告诉前端有没有设过。"""
+    cfg = normalize_proxy_config(cfg)
+    public = {k: v for k, v in cfg.items() if k != 'password'}
+    public['has_password'] = bool(cfg['password'])
+    return public
+
+
+def probe_proxy(cfg, timeout=8.0):
+    """用候选代理实际连一次 Telegram 的 DC，返回 (ok, 描述)。
+
+    保存前必须真连一次：配错了直接保存会让守护进程失去 Telegram 连接，
+    而这时候人已经在页面上、没法再靠页面把自己救回来。
+    """
+    cfg = normalize_proxy_config(cfg)
+    target = ('149.154.167.51', 443)  # Telegram DC2，仅用于连通性探测
+
+    started = time.time()
+    try:
+        if not cfg['enabled']:
+            sock = socket.create_connection(target, timeout=timeout)
+            sock.close()
+            return True, f"直连可达（{int((time.time() - started) * 1000)} ms）"
+
+        if cfg['type'] == 'mtproxy':
+            # MTProxy 不是标准 SOCKS/HTTP，只能验证端口可达
+            sock = socket.create_connection((cfg['host'], cfg['port']), timeout=timeout)
+            sock.close()
+            return True, f"MTProxy 端口可达（{int((time.time() - started) * 1000)} ms）；" \
+                         "该类型无法在保存前验证真实转发能力"
+
+        sock = socks.socksocket()
+        sock.settimeout(timeout)
+        sock.set_proxy(
+            _PROXY_TYPE_CONSTS.get(cfg['type'], socks.SOCKS5),
+            cfg['host'], cfg['port'],
+            username=cfg['username'] or None,
+            password=cfg['password'] or None,
+        )
+        try:
+            sock.connect(target)
+        finally:
+            with contextlib.suppress(Exception):
+                sock.close()
+        return True, f"经代理连通 Telegram（{int((time.time() - started) * 1000)} ms）"
+    except Exception as probe_error:
+        return False, f"{type(probe_error).__name__}: {probe_error}"
+
+
+@app.route('/api/proxy', methods=['GET'])
+def api_proxy_get():
+    return jsonify({
+        'config': _proxy_config_for_client(active_proxy_config),
+        'source': proxy_config_source,
+        'env_config': _proxy_config_for_client(env_proxy_config),
+        'description': describe_proxy_config(active_proxy_config),
+        'connected': bool(web_client is not None and getattr(web_client, 'is_connected', lambda: False)()),
+        'active_downloads': len(web_in_progress),
+        'proxy_types': list(PROXY_TYPES),
+    })
+
+
+def _merge_proxy_payload(payload):
+    """把前端提交的表单合成完整配置。
+
+    密码留空表示"沿用原来的"——因为 GET 从不回传密码明文，前端也就没法原样回填。
+    要清空密码得显式传 clear_password。
+    """
+    incoming = dict(payload or {})
+    merged = normalize_proxy_config({
+        'enabled': incoming.get('enabled', True),
+        'type': incoming.get('type'),
+        'host': incoming.get('host'),
+        'port': incoming.get('port'),
+        'username': incoming.get('username'),
+        'password': incoming.get('password') or '',
+        'resolve_once': incoming.get('resolve_once', False),
+    })
+    if not merged['password'] and not incoming.get('clear_password'):
+        previous = normalize_proxy_config(active_proxy_config)
+        if previous['host'] == merged['host'] and previous['username'] == merged['username']:
+            merged['password'] = previous['password']
+    return merged
+
+
+@app.route('/api/proxy/test', methods=['POST'])
+def api_proxy_test():
+    candidate = _merge_proxy_payload(request.get_json(silent=True) or {})
+    ok, message = probe_proxy(candidate)
+    logger.info("Proxy test for %s -> %s (%s)",
+                describe_proxy_config(candidate), "OK" if ok else "FAILED", message)
+    return jsonify({'ok': ok, 'message': message,
+                    'description': describe_proxy_config(candidate)})
+
+
+@app.route('/api/proxy', methods=['POST'])
+def api_proxy_save():
+    global active_proxy_config, proxy, proxy_config_source
+
+    payload = request.get_json(silent=True) or {}
+    candidate = _merge_proxy_payload(payload)
+
+    if candidate['enabled'] and not (candidate['host'] and candidate['port']):
+        return jsonify({'error': '启用代理时必须填写主机和端口（1-65535）'}), 400
+
+    # 除非显式跳过，保存前先真连一次——配错了会让守护进程失去 Telegram 连接
+    if not payload.get('skip_test'):
+        ok, message = probe_proxy(candidate)
+        if not ok:
+            return jsonify({'error': f'代理测试失败，未保存：{message}',
+                            'test_failed': True}), 400
+
+    previous_config = normalize_proxy_config(active_proxy_config)
+    previous_source = proxy_config_source
+
+    try:
+        new_proxy = build_proxy_tuple(candidate)
+    except Exception as build_error:
+        return jsonify({'error': f'代理配置无效：{build_error}'}), 400
+
+    save_setting(SETTING_PROXY, candidate)
+    active_proxy_config = candidate
+    proxy = new_proxy
+    proxy_config_source = 'web'
+
+    applied = False
+    apply_message = '已保存；重启容器后生效'
+    if web_proxy_applier is not None:
+        try:
+            applied, apply_message = web_proxy_applier(new_proxy)
+        except Exception as apply_error:
+            applied, apply_message = False, f'{type(apply_error).__name__}: {apply_error}'
+
+        if not applied:
+            # 应用失败就回滚，别把守护进程留在一个连不上 Telegram 的状态里
+            logger.error("Applying new proxy failed (%s); rolling back to %s",
+                         apply_message, describe_proxy_config(previous_config))
+            active_proxy_config = previous_config
+            proxy = build_proxy_tuple(previous_config)
+            proxy_config_source = previous_source
+            if previous_source == 'env':
+                delete_setting(SETTING_PROXY)
+            else:
+                save_setting(SETTING_PROXY, previous_config)
+            with contextlib.suppress(Exception):
+                web_proxy_applier(proxy)
+            return jsonify({
+                'error': f'新代理无法连接 Telegram，已回滚到原配置：{apply_message}',
+                'rolled_back': True,
+                'config': _proxy_config_for_client(active_proxy_config),
+            }), 400
+
+    logger.info("Proxy switched to %s via web UI", describe_proxy_config(candidate))
+    return jsonify({
+        'success': True,
+        'applied': applied,
+        'message': apply_message,
+        'config': _proxy_config_for_client(active_proxy_config),
+        'source': proxy_config_source,
+        'description': describe_proxy_config(active_proxy_config),
+    })
+
+
+@app.route('/api/proxy/reset', methods=['POST'])
+def api_proxy_reset():
+    """丢掉页面上保存的配置，恢复用 .env 里的那份。"""
+    global active_proxy_config, proxy, proxy_config_source
+
+    delete_setting(SETTING_PROXY)
+    active_proxy_config = normalize_proxy_config(env_proxy_config)
+    proxy = build_proxy_tuple(active_proxy_config)
+    proxy_config_source = 'env'
+
+    applied, apply_message = False, '已恢复为 .env 配置；重启容器后生效'
+    if web_proxy_applier is not None:
+        with contextlib.suppress(Exception):
+            applied, apply_message = web_proxy_applier(proxy)
+
+    logger.info("Proxy reset to env config: %s", describe_proxy_config(active_proxy_config))
+    return jsonify({'success': True, 'applied': applied, 'message': apply_message,
+                    'config': _proxy_config_for_client(active_proxy_config),
+                    'source': proxy_config_source,
+                    'description': describe_proxy_config(active_proxy_config)})
+
 
 @app.route('/api/retry', methods=['POST'])
 def api_retry():
@@ -2335,23 +2638,15 @@ try:
     # 处理中断的任务
     handle_interrupted_tasks()
     
-    # Log proxy configuration
+    # Log proxy configuration（describe_proxy_config 保证不打印密码）
     if proxy:
-        if isinstance(proxy, tuple):
-            configured_endpoint = proxy_configured_host or proxy[1]
-            auth_mode = 'authentication' if len(proxy) > 4 and proxy[4] else 'no authentication'
-            if proxy_resolved_once and proxy_runtime_host:
-                logger.info(
-                    "Using proxy: %s:%s pinned to %s with %s",
-                    configured_endpoint,
-                    proxy[2],
-                    proxy_runtime_host,
-                    auth_mode,
-                )
-            else:
-                logger.info("Using proxy: %s:%s with %s", configured_endpoint, proxy[2], auth_mode)
-        else:
-            logger.info(f"Using proxy: {proxy.get('addr')}:{proxy.get('port')} with {'authentication' if proxy.get('username') else 'no authentication'}")
+        logger.info("Using proxy: %s (来源: %s)",
+                    describe_proxy_config(active_proxy_config), proxy_config_source)
+        if isinstance(proxy, tuple) and active_proxy_config.get('resolve_once'):
+            configured_host = active_proxy_config.get('host')
+            runtime_host = proxy[1] if len(proxy) > 1 else configured_host
+            if runtime_host != configured_host:
+                logger.info("Proxy host %s pinned to %s", configured_host, runtime_host)
     else:
         logger.info("No proxy configured")
     
@@ -3267,11 +3562,38 @@ try:
             future = asyncio.run_coroutine_threadsafe(resume_download(download_id_int), main_loop)
             return future.result(timeout=30)
 
+        async def apply_proxy(new_proxy):
+            """把新代理应用到运行中的客户端。
+
+            Telethon 的 set_proxy 只对"下一次重连"生效（连接中调用没有立即效果），
+            所以必须显式断开再连。断开会打断正在进行的下载，但它们的 .tdd 半成品
+            还在，worker 的重试逻辑会从断点接着下。
+
+            连不上就抛异常，交给 /api/proxy 回滚——绝不把守护进程留在"页面已改、
+            实际连不上 Telegram"的状态。
+            """
+            client.set_proxy(new_proxy)
+            with contextlib.suppress(Exception):
+                await client.disconnect()
+            await client.connect()
+            # connect() 成功不代表这条链路真能用，再打一次真实 RPC 确认
+            await asyncio.wait_for(client.get_me(), timeout=30)
+            return True, describe_proxy_config(active_proxy_config)
+
+        def schedule_apply_proxy(new_proxy):
+            future = asyncio.run_coroutine_threadsafe(apply_proxy(new_proxy), main_loop)
+            try:
+                return future.result(timeout=90)
+            except Exception as apply_error:
+                return False, f'{type(apply_error).__name__}: {apply_error}'
+
         global web_retry_scheduler, web_cancel_scheduler, web_pause_scheduler, web_resume_scheduler
+        global web_proxy_applier
         web_retry_scheduler = schedule_retry
         web_cancel_scheduler = schedule_cancel
         web_pause_scheduler = schedule_pause
         web_resume_scheduler = schedule_resume
+        web_proxy_applier = schedule_apply_proxy
         await restore_pending_downloads()
         
         @client.on(events.NewMessage())

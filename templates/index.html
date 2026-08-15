@@ -2103,6 +2103,62 @@
                     </div>
                 </section>
             </div>
+
+            <section class="card" id="proxyCard" aria-label="代理设置">
+                <div class="card-header">
+                    <h2 class="card-title">代理设置</h2>
+                    <span class="badge" id="proxyBadge">读取中…</span>
+                </div>
+                <div class="card-body">
+                    <p class="hint-text" id="proxyHint">
+                        修改后会立即重连 Telegram 生效，并保存到数据库（容器重建后依然有效，优先级高于 .env）。
+                    </p>
+                    <div class="field">
+                        <label class="batch-bar-check" for="proxyEnabled">
+                            <input type="checkbox" id="proxyEnabled" />
+                            <span>启用代理（不勾选则直连）</span>
+                        </label>
+                    </div>
+                    <div id="proxyFields">
+                        <div class="field">
+                            <label for="proxyType">类型</label>
+                            <select id="proxyType" class="pager-size-select">
+                                <option value="socks5">socks5</option>
+                                <option value="http">http</option>
+                                <option value="mtproxy">mtproxy</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="proxyHost">主机</label>
+                            <input id="proxyHost" type="text" placeholder="例如 192.168.5.31" autocomplete="off" />
+                        </div>
+                        <div class="field">
+                            <label for="proxyPort">端口</label>
+                            <input id="proxyPort" type="number" min="1" max="65535" placeholder="例如 1080" autocomplete="off" />
+                        </div>
+                        <div class="field">
+                            <label for="proxyUsername">用户名（没有就留空）</label>
+                            <input id="proxyUsername" type="text" autocomplete="off" />
+                        </div>
+                        <div class="field">
+                            <label for="proxyPassword">密码（留空表示不修改）</label>
+                            <input id="proxyPassword" type="password" autocomplete="new-password" />
+                        </div>
+                        <div class="field">
+                            <label class="batch-bar-check" for="proxyResolveOnce">
+                                <input type="checkbox" id="proxyResolveOnce" />
+                                <span>启动时把域名解析成固定 IP（代理是 DNS 负载均衡、且 Telegram 报 AUTH_KEY_DUPLICATED 时开）</span>
+                            </label>
+                        </div>
+                    </div>
+                    <p class="hint-text" id="proxyResult" role="status" aria-live="polite"></p>
+                    <div class="form-actions">
+                        <button type="button" id="proxyTestBtn" class="btn btn-lg">测试连接</button>
+                        <button type="button" id="proxySaveBtn" class="btn primary btn-lg">保存并应用</button>
+                        <button type="button" id="proxyResetBtn" class="btn btn-lg">恢复 .env 配置</button>
+                    </div>
+                </div>
+            </section>
         </main>
 
         <!-- 悬浮分页条：放在卡片外，避免被 card 的 overflow/圆角裁切 -->
@@ -3902,12 +3958,150 @@
                 state.webAuthenticated = true;
             }
             setAuthorized(authBootstrap.authorized);
+            bindProxyControls();
             if (isWebAuthReady()) {
                 await startRealtime();
+                await loadProxyConfig();
             } else {
                 renderWebAuthCard();
                 setConnection(false);
             }
+        }
+
+        /* ---------- 代理设置 ---------- */
+        const proxyEls = {
+            card: () => document.getElementById('proxyCard'),
+            badge: () => document.getElementById('proxyBadge'),
+            enabled: () => document.getElementById('proxyEnabled'),
+            fields: () => document.getElementById('proxyFields'),
+            type: () => document.getElementById('proxyType'),
+            host: () => document.getElementById('proxyHost'),
+            port: () => document.getElementById('proxyPort'),
+            username: () => document.getElementById('proxyUsername'),
+            password: () => document.getElementById('proxyPassword'),
+            resolveOnce: () => document.getElementById('proxyResolveOnce'),
+            result: () => document.getElementById('proxyResult'),
+            testBtn: () => document.getElementById('proxyTestBtn'),
+            saveBtn: () => document.getElementById('proxySaveBtn'),
+            resetBtn: () => document.getElementById('proxyResetBtn'),
+        };
+
+        function syncProxyFieldsDisabled() {
+            const on = !!proxyEls.enabled()?.checked;
+            const box = proxyEls.fields();
+            if (box) box.style.opacity = on ? '1' : '0.5';
+            ['type', 'host', 'port', 'username', 'password', 'resolveOnce'].forEach(k => {
+                const el = proxyEls[k]();
+                if (el) el.disabled = !on;
+            });
+        }
+
+        function renderProxyConfig(data) {
+            if (!data || !data.config) return;
+            const cfg = data.config;
+            const set = (key, value) => { const el = proxyEls[key](); if (el) el.value = value; };
+            if (proxyEls.enabled()) proxyEls.enabled().checked = !!cfg.enabled;
+            set('type', cfg.type || 'socks5');
+            set('host', cfg.host || '');
+            set('port', cfg.port || '');
+            set('username', cfg.username || '');
+            // 后端从不回传密码明文，这里只用 placeholder 说明"已设置"
+            const pwd = proxyEls.password();
+            if (pwd) {
+                pwd.value = '';
+                pwd.placeholder = cfg.has_password ? '已设置（留空表示不修改）' : '无密码';
+            }
+            if (proxyEls.resolveOnce()) proxyEls.resolveOnce().checked = !!cfg.resolve_once;
+
+            const badge = proxyEls.badge();
+            if (badge) {
+                badge.textContent = data.description || '未知';
+                badge.title = data.source === 'web' ? '来源：页面保存的配置' : '来源：.env / 启动参数';
+            }
+            syncProxyFieldsDisabled();
+        }
+
+        function collectProxyPayload() {
+            const enabled = !!proxyEls.enabled()?.checked;
+            return {
+                enabled,
+                type: proxyEls.type()?.value || 'socks5',
+                host: (proxyEls.host()?.value || '').trim(),
+                port: (proxyEls.port()?.value || '').trim(),
+                username: (proxyEls.username()?.value || '').trim(),
+                password: proxyEls.password()?.value || '',
+                resolve_once: !!proxyEls.resolveOnce()?.checked,
+            };
+        }
+
+        function setProxyBusy(busy, note) {
+            [proxyEls.testBtn(), proxyEls.saveBtn(), proxyEls.resetBtn()].forEach(b => {
+                if (b) b.disabled = busy;
+            });
+            const result = proxyEls.result();
+            if (result && note !== undefined) result.textContent = note;
+        }
+
+        async function loadProxyConfig() {
+            try {
+                renderProxyConfig(await apiFetch('/api/proxy'));
+            } catch (e) {
+                const badge = proxyEls.badge();
+                if (badge) badge.textContent = '读取失败';
+            }
+        }
+
+        function bindProxyControls() {
+            proxyEls.enabled()?.addEventListener('change', syncProxyFieldsDisabled);
+
+            proxyEls.testBtn()?.addEventListener('click', async () => {
+                setProxyBusy(true, '测试中…');
+                try {
+                    const res = await apiFetch('/api/proxy/test', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(collectProxyPayload()),
+                    });
+                    setProxyBusy(false, `${res.ok ? '✅' : '❌'} ${res.message}`);
+                    toast(res.ok ? '代理可用' : '代理不可用', res.ok ? 'success' : 'error');
+                } catch (e) {
+                    setProxyBusy(false, `❌ ${e.message}`);
+                    toast(`测试失败：${e.message}`, 'error');
+                }
+            });
+
+            proxyEls.saveBtn()?.addEventListener('click', async () => {
+                setProxyBusy(true, '保存并重连中…（会中断正在进行的下载，可断点续传）');
+                try {
+                    const res = await apiFetch('/api/proxy', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(collectProxyPayload()),
+                    });
+                    setProxyBusy(false, `✅ ${res.message || '已应用'}`);
+                    toast('代理已切换', 'success');
+                    renderProxyConfig(res);
+                    await loadStatus();
+                } catch (e) {
+                    // 后端保存失败会自动回滚，这里把原因如实显示出来
+                    setProxyBusy(false, `❌ ${e.message}`);
+                    toast(e.message, 'error', 8000);
+                    await loadProxyConfig();
+                }
+            });
+
+            proxyEls.resetBtn()?.addEventListener('click', async () => {
+                setProxyBusy(true, '恢复中…');
+                try {
+                    const res = await apiFetch('/api/proxy/reset', { method: 'POST' });
+                    setProxyBusy(false, `✅ ${res.message || '已恢复'}`);
+                    renderProxyConfig(res);
+                    toast('已恢复为 .env 配置', 'success');
+                } catch (e) {
+                    setProxyBusy(false, `❌ ${e.message}`);
+                    toast(e.message, 'error');
+                }
+            });
         }
 
         if (document.readyState === 'loading') {
