@@ -24,6 +24,28 @@ DAEMON_PATH = os.path.abspath(
 )
 
 
+def _load_module_level_function(name, namespace):
+    """把一个模块级函数按真实源码编译进命名空间。
+
+    handle_link_message 依赖 has_downloadable_media，这里直接摘真实实现而不是写替身，
+    免得实现改了测试还在按老行为过。
+    """
+    with open(DAEMON_PATH, "r", encoding="utf-8") as handle:
+        tree = ast.parse(handle.read(), filename=DAEMON_PATH)
+
+    picked = [
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in (name, "get_message_object")
+    ]
+    if not any(node.name == name for node in picked):
+        raise AssertionError(f"未能在守护进程源码里找到 {name}")
+
+    module = ast.Module(body=picked, type_ignores=[])
+    ast.fix_missing_locations(module)
+    exec(compile(module, DAEMON_PATH, "exec"), namespace)  # noqa: S102
+    return namespace[name]
+
+
 def _load_handler(namespace):
     """把 handle_link_message 编译进给定的命名空间（闭包变量退化成全局查找）。"""
     with open(DAEMON_PATH, "r", encoding="utf-8") as handle:
@@ -87,11 +109,18 @@ class FakeEvent:
 
 
 class FakeMedia:
-    """带媒体的消息替身（photo 非空即视为可下载）。"""
+    """带媒体的消息替身（photo 非空即视为可下载）。
 
-    def __init__(self, message_id, has_media=True):
+    ``grouped_id`` 非空表示这条属于相册；``web_preview`` 非空表示它其实只是一条
+    带网页链接预览的文本消息——后者的 photo 会返回预览图，正是要防的坑。
+    """
+
+    def __init__(self, message_id, has_media=True, grouped_id=None, web_preview=None):
         self.id = message_id
-        self.photo = object() if has_media else None
+        self.grouped_id = grouped_id
+        self.web_preview = web_preview
+        # 复刻 Telethon：真实媒体取不到时 photo 会回退到预览图
+        self.photo = object() if (has_media or web_preview is not None) else None
         self.document = None
 
 
@@ -112,6 +141,7 @@ class HandleLinkMessageTests(unittest.IsolatedAsyncioTestCase):
             "enqueue_download_message": enqueue,
             "bounded_notify": _passthrough_notify,
         }
+        _load_module_level_function("has_downloadable_media", namespace)
         return _load_handler(namespace)
 
     async def test_single_link_queues_media(self):
@@ -132,6 +162,56 @@ class HandleLinkMessageTests(unittest.IsolatedAsyncioTestCase):
         summary = event.message.replies[0].text
         self.assertIn("入队 1 个文件", summary)
         self.assertIn("私密频道 123 消息 456", summary)
+
+    async def test_album_item_gets_an_explicit_hint(self):
+        """回归：链接带 ?single 指向相册里的一条时，只下一条这件事必须说出来。
+
+        Telegram 客户端在相册里"复制链接"会自动加 ?single，用户看到的现象是
+        "我发的是视频，却只下回来一张封面图"，不提示就无从察觉。
+        """
+        async def fetch(link, budget):
+            return [FakeMedia(456, grouped_id=99887766)]
+
+        async def enqueue(message_obj, template, reply_target=None, silent=False, **kwargs):
+            return {"queued": True, "filename": "cover.jpg"}
+
+        handler = self._build(fetch, enqueue)
+        event = FakeEvent()
+        await handler(event, [parse_link("https://t.me/c/123/456?single")])
+
+        summary = event.message.replies[0].text
+        self.assertIn("入队 1 个文件", summary)
+        self.assertIn("相册", summary)
+        self.assertIn("?single", summary)
+
+    async def test_non_album_message_gets_no_album_hint(self):
+        async def fetch(link, budget):
+            return [FakeMedia(456)]
+
+        async def enqueue(message_obj, template, reply_target=None, silent=False, **kwargs):
+            return {"queued": True, "filename": "a.mp4"}
+
+        handler = self._build(fetch, enqueue)
+        event = FakeEvent()
+        await handler(event, [parse_link("https://t.me/c/123/456")])
+
+        self.assertNotIn("相册", event.message.replies[0].text)
+
+    async def test_web_preview_only_message_is_not_queued(self):
+        """回归：链接指向的消息只是"带网页预览的文本"时，不能下预览缩略图。"""
+        async def fetch(link, budget):
+            return [FakeMedia(456, has_media=False, web_preview=object())]
+
+        async def enqueue(*a, **k):
+            raise AssertionError("网页链接预览不该被当成可下载媒体入队")
+
+        handler = self._build(fetch, enqueue)
+        event = FakeEvent()
+        await handler(event, [parse_link("https://t.me/c/123/456")])
+
+        summary = event.message.replies[0].text
+        self.assertIn("入队 0 个文件", summary)
+        self.assertIn("网页链接预览", summary)
 
     async def test_messages_without_media_are_skipped(self):
         async def fetch(link, budget):

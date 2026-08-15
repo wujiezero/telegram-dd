@@ -2141,6 +2141,29 @@ def get_message_object(message_or_event):
     return message_or_event
 
 
+def has_downloadable_media(message_or_event) -> bool:
+    """消息里是否有**真正的**媒体——链接预览里的图/文件不算。
+
+    这是个必须显式绕开的 Telethon 陷阱：``Message.photo`` 和 ``Message.document``
+    在取不到真实媒体时**都会回退到 web_preview**（网页链接预览）里的图或文件，
+    源码里两者的 else 分支都是 ``web = self.web_preview``。于是一条"带链接预览的
+    普通文本消息"会被认成"有可下载媒体"，守护进程兴冲冲下回来一张预览缩略图、
+    还报告成功，而用户真正想要的东西一个都没下到——2026-08-15 排查"发的是视频
+    链接却下回来一张图"时发现的。
+
+    判据：``web_preview`` 非空就说明这条消息的 media 是 ``MessageMediaWebPage``，
+    此时无论 ``photo`` / ``document`` 返回什么都不算数（一条消息只有一个 media 字段，
+    真媒体和网页预览不可能并存）。
+    """
+    message_obj = get_message_object(message_or_event)
+
+    if getattr(message_obj, 'web_preview', None) is not None:
+        return False
+
+    return (getattr(message_obj, 'photo', None) is not None
+            or getattr(message_obj, 'document', None) is not None)
+
+
 def get_source_channel_id(message_or_event) -> int:
     message_obj = get_message_object(message_or_event)
     peer = getattr(message_obj, 'peer_id', None)
@@ -2687,9 +2710,9 @@ try:
             return await bounded_notify(client.send_message(peerChannel, text), "send to monitored channel")
 
         async def enqueue_download_message(message_obj, notice_template="{0} added to queue", target_dir_override=None, existing_download_id=None, silent=False, recovery_note=None, reply_target=None):
-            is_photo = getattr(message_obj, 'photo', None) is not None
-            is_document = getattr(message_obj, 'document', None) is not None
-            if not (is_photo or is_document):
+            # 用 has_downloadable_media 而不是直接看 photo / document：
+            # 后者会把网页链接预览里的图当成媒体（见该函数注释）
+            if not has_downloadable_media(message_obj):
                 raise ValueError("That message does not contain a downloadable file")
 
             filename = getFilename(message_obj)
@@ -2878,11 +2901,7 @@ try:
                     if budget <= 0:
                         truncated_here = True
                         break
-                    has_media = (
-                        getattr(message_obj, 'photo', None) is not None
-                        or getattr(message_obj, 'document', None) is not None
-                    )
-                    if not has_media:
+                    if not has_downloadable_media(message_obj):
                         skipped_total += 1
                         continue
                     try:
@@ -2909,13 +2928,26 @@ try:
                     else:
                         skipped_total += 1
 
+                # Telegram 客户端在相册里"复制链接"会自动带上 ?single，此时按设计只下
+                # 链接指向的那一条（见 fetch_link_messages）。用户看到的现象却是
+                # "我发的明明是视频，却只下回来一张封面图"，所以这里必须显式说出来，
+                # 不能默默只下一条。
+                album_hint = ""
+                if len(messages) == 1 and getattr(messages[0], 'grouped_id', None):
+                    album_hint = (
+                        "（这条属于相册，只下了链接指向的这一条；"
+                        "去掉链接末尾的 ?single 重发可下整组）")
+
                 if queued_here:
                     note = f"✅ {label}：{queued_here} 个文件已入队"
                     if truncated_here:
                         note += f"（已达 {link_max_messages} 条上限，其余未处理）"
+                    note += album_hint
                     notes.append(note)
                 elif not failed_here:
-                    notes.append(f"⚠️ {label}：消息里没有可下载的文件")
+                    notes.append(
+                        f"⚠️ {label}：消息里没有可下载的文件（纯文字或只有网页链接预览）"
+                        + album_hint)
 
             summary_lines = [
                 f"🔗 链接解析完成：入队 {queued_total} 个文件"
@@ -3268,13 +3300,18 @@ try:
                         await handle_link_message(event, links)
                         return
 
-                # 检查是否是可下载的媒体消息
-                # 使用 event.photo 和 event.document 快捷方式，更可靠
-                is_photo = event.photo is not None
-                is_document = event.document is not None
-
-                if is_photo or is_document:
+                # 检查是否是可下载的媒体消息。
+                # 必须用 has_downloadable_media，不能直接看 event.photo / event.document：
+                # 后者会回退到网页预览里的图/文件。上面那条链接分支只挡掉了 t.me 链接，
+                # 往频道里贴一条 YouTube 之类的**外部**链接仍会走到这里，把预览缩略图
+                # 当成号主上传的图片下下来。
+                if has_downloadable_media(event.message):
                     await enqueue_download_message(event.message)
+                elif getattr(event.message, 'web_preview', None) is not None:
+                    # 纯文本 + 网页预览：一条普通消息而已，既不是媒体也不该当命令解析，
+                    # 更不该回一句"不可下载"去刷频道。
+                    logger.debug("Ignoring text message that only carries a web page preview")
+                    return
                 elif event.media:
                     # 有 media 但不是 photo 或 document
                     message=await event.reply("That is not downloadable. Try to send it as a file.")
