@@ -3562,23 +3562,57 @@ try:
             future = asyncio.run_coroutine_threadsafe(resume_download(download_id_int), main_loop)
             return future.result(timeout=30)
 
+        async def interrupt_downloads_for_proxy_switch():
+            """切代理前把正在跑的下载全部打断，让它们统一走"重新入队 + 断点续传"。
+
+            **不这么做的话，切换是不彻底的**：fast_download 会给每个文件另开独立的
+            MTProtoSender，代理是建连接时从 ``client._proxy`` 读的，而
+            ``client.disconnect()`` 只断主连接、带不走这些 sender。于是切换瞬间
+            恰好没报错的任务会毫不知情地继续用**旧代理**一路下到文件结束
+            （2026-08-15 实测：切换 4 分钟后仍有 2 条连接挂在旧代理上）。
+
+            **注意不要往 cancelled_download_ids 里写**：那是"用户主动取消"的语义，
+            worker 见到它会删掉半成品且不再重试。这里只 cancel asyncio 任务，
+            worker 的异常分支会保留 .tdd 并重新入队，断点续传照常。
+            """
+            pending = [task for task in list(active_download_tasks.values())
+                       if task is not None and not task.done()]
+            if not pending:
+                return 0
+
+            for task in pending:
+                task.cancel()
+            # 等各自的 finally 跑完（transferrer.finish 会断开并行 sender），
+            # 这样旧连接是在旧代理还活着的时候被干净关掉的
+            with contextlib.suppress(Exception):
+                await asyncio.wait(pending, timeout=20)
+            logger.info(
+                "Interrupted %d active download(s) before switching proxy; "
+                "they will resume from their breakpoints on the new proxy", len(pending))
+            return len(pending)
+
         async def apply_proxy(new_proxy):
             """把新代理应用到运行中的客户端。
 
             Telethon 的 set_proxy 只对"下一次重连"生效（连接中调用没有立即效果），
-            所以必须显式断开再连。断开会打断正在进行的下载，但它们的 .tdd 半成品
-            还在，worker 的重试逻辑会从断点接着下。
+            所以必须显式断开再连。
 
             连不上就抛异常，交给 /api/proxy 回滚——绝不把守护进程留在"页面已改、
             实际连不上 Telegram"的状态。
             """
+            interrupted = await interrupt_downloads_for_proxy_switch()
+
             client.set_proxy(new_proxy)
             with contextlib.suppress(Exception):
                 await client.disconnect()
             await client.connect()
             # connect() 成功不代表这条链路真能用，再打一次真实 RPC 确认
             await asyncio.wait_for(client.get_me(), timeout=30)
-            return True, describe_proxy_config(active_proxy_config)
+
+            note = describe_proxy_config(active_proxy_config)
+            if interrupted:
+                note += f"（已打断 {interrupted} 个下载，将从断点用新代理续传）"
+            return True, note
 
         def schedule_apply_proxy(new_proxy):
             future = asyncio.run_coroutine_threadsafe(apply_proxy(new_proxy), main_loop)
