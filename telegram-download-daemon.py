@@ -1292,11 +1292,10 @@ def api_tasks():
             filename = getFilename(event)
             task_id = str(item[3]) if len(item) > 3 and item[3] is not None else ''
             queued_at = item[4] if len(item) > 4 and isinstance(item[4], (int, float)) else None
-            # Get file size from event
-            size = 0
-            if hasattr(event.media, 'document'):
-                size = event.media.document.size
-            
+            # 走统一的口径：照片有 5 种 PhotoSize 变体，只看 document 的话
+            # 排队中的照片会一直显示 0 字节（见 photo_size_byte_count）
+            size = get_message_media_size(event)
+
             tasks.append({
                 'task_id': task_id,
                 'filename': filename,
@@ -2226,6 +2225,48 @@ def getFilename(message_or_event) -> str:
     
     return sanitize_filename(mediaFileName)
 
+def photo_size_byte_count(photo_size) -> int:
+    """一个 PhotoSize 变体下载下来会占多少字节。
+
+    **必须和 Telethon 的口径完全一致**，否则下载完成后的大小校验会拿错数字去比，
+    照片会被无辜判成失败（2026-08-15 就是这么挂的）。Telegram 的 5 个变体里
+    只有 ``PhotoSize`` 有 ``size`` 字段，别的各有各的算法：
+
+    - ``PhotoSize``            → ``size``（int）
+    - ``PhotoSizeProgressive`` → ``sizes``（渐进式 JPEG 的分级大小**列表**），取 max；
+      **这个变体没有 size 字段**，而它往往正是分辨率最高、Telethon 真正会下载的那个
+    - ``PhotoCachedSize``      → ``bytes`` 就是图片内容本身
+    - ``PhotoStrippedSize``    → ``bytes`` 是掐头去尾的缩略图，下载时会补回标准
+      JPEG 头尾，正好 622 字节（首字节为 1 才是这种压缩格式）
+    - ``PhotoPathSize``        → ``bytes`` 是动画贴纸轮廓的 SVG 路径，不是图片，
+      Telethon 会把它排除掉，这里同样记 0
+
+    对应 telethon/utils.py::_photo_size_byte_count 和
+    telethon/client/downloads.py::_get_thumb / _download_photo。
+    用 getattr 而不是 isinstance，是为了让测试能用简单替身，也不受 Telethon 版本影响。
+    """
+    # PhotoSizeProgressive：注意字段是复数 sizes，且没有 size
+    progressive_sizes = getattr(photo_size, 'sizes', None)
+    if isinstance(progressive_sizes, (list, tuple)):
+        numeric = [int(item) for item in progressive_sizes if isinstance(item, int)]
+        if numeric:
+            return max(numeric)
+
+    candidate_size = getattr(photo_size, 'size', None)
+    if isinstance(candidate_size, int):
+        return candidate_size
+
+    raw_bytes = getattr(photo_size, 'bytes', None)
+    if isinstance(raw_bytes, (bytes, bytearray)):
+        if type(photo_size).__name__ == 'PhotoPathSize':
+            return 0
+        if len(raw_bytes) >= 3 and raw_bytes[0] == 1:
+            return len(raw_bytes) + 622
+        return len(raw_bytes)
+
+    return 0
+
+
 def get_message_media_size(message_or_event) -> int:
     message_obj = get_message_object(message_or_event)
 
@@ -2233,12 +2274,13 @@ def get_message_media_size(message_or_event) -> int:
         return int(message_obj.document.size)
 
     if getattr(message_obj, 'photo', None):
-        largest_known_size = 0
-        for photo_size in getattr(message_obj.photo, 'sizes', []) or []:
-            candidate_size = getattr(photo_size, 'size', None)
-            if isinstance(candidate_size, int) and candidate_size > largest_known_size:
-                largest_known_size = candidate_size
-        return largest_known_size
+        # Telethon 下载的是"字节数最大"的那个变体（_get_thumb 按字节数排序取末位），
+        # 这里必须用同一口径挑同一个变体，否则校验必然对不上。
+        return max(
+            (photo_size_byte_count(photo_size)
+             for photo_size in getattr(message_obj.photo, 'sizes', []) or []),
+            default=0
+        )
 
     return 0
 
